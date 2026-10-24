@@ -23,9 +23,12 @@ const USAGE = `usage: tracegate <command> [options]
   sync    [--remote <[user@]host:/abs/ledger>]
 
 Broker (one queue for the machine's CI work; see docs/design/broker.md):
-  lease   [--class c] [--tokens n] [--exclusive] [--est seconds] [--label l]
-          [--deadline-min m] [--requeue] [--quiet] -- <command…>
-                                       run a command when the broker grants capacity
+  lease   [--class c] [--tokens n] [--min-tokens m] [--mem-per-token MB] [--exclusive]
+          [--est seconds] [--label l] [--deadline-min m] [--requeue] [--quiet] -- <command…>
+                                       run a command when the broker grants capacity;
+                                       --min-tokens makes it elastic (granted m..n workers)
+  machine [--json]                     this host's hardware, the latest load/memory sample,
+                                       and the cpu/memory budgets the broker hands out now
   queue   [--json]                     running leases, the queue and the reservation
   explain <job id>                     why a job waits, and when it is reserved to start
   history [--n 50]                     recent broker events
@@ -50,11 +53,25 @@ function parse(argv) {
 
 function printQueue(s, json) {
   if (json) { delete s.ref; delete s.type; console.log(JSON.stringify(s, null, 2)); return; }
-  const row = (j) => `  ${j.id.padEnd(6)} ${j.class.padEnd(8)} ${String(j.tokens).padStart(3)}${j.exclusive ? ' excl' : '     '}  ${j.label}`;
-  console.log(`capacity ${s.capacity}, in use ${s.used} (broker pid ${s.pid})`);
+  const row = (j) => `  ${j.id.padEnd(6)} ${j.class.padEnd(8)} ${String(j.tokens).padStart(3)}${j.minTokens ? `(≥${j.minTokens})` : ''}${j.exclusive ? ' excl' : '     '}${j.memMB ? ` ${j.memMB}MB` : ''}${j.contended ? ' CONTENDED' : ''}  ${j.label}`;
+  const lim = s.limit ?? { cpu: s.capacity };
+  console.log(`capacity ${lim.cpu} of ${s.capacity} token(s)${lim.memMB !== null && lim.memMB !== undefined ? `, memory budget ${lim.memMB} MB` : ''}, in use ${s.used}${s.usedMB ? ` (${s.usedMB} MB reserved)` : ''} (broker pid ${s.pid})`);
+  if (lim.why?.length && (lim.cpu < s.capacity || lim.pressure)) console.log(`  reduced: ${lim.why.join('; ')}`);
+  if (s.shadowLimit) console.log(`  adaptive (shadow) would allow ${s.shadowLimit.cpu} token(s)${s.shadowLimit.memMB !== null ? `, ${s.shadowLimit.memMB} MB` : ''}: ${s.shadowLimit.why.join('; ')}`);
   console.log(`running (${s.running.length}):`); for (const j of s.running) console.log(`${row(j)}  fence ${j.fence}${j.nested ? ` in ${j.parent}` : ''}`);
   console.log(`queued (${s.queued.length}):`); for (const j of s.queued) console.log(row(j));
   if (s.reservation) console.log(`reservation: ${s.reservation.id} starts ${s.reservation.at ?? 'when a job without an estimate ends'}`);
+}
+
+function printMachine(m, json) {
+  delete m.ref; delete m.type;
+  if (json) { console.log(JSON.stringify(m, null, 2)); return; }
+  const h = m.hw; const x = m.sample;
+  console.log(`${m.host}: ${h.cores} cores${h.perfCores ? ` (${h.perfCores} performance)` : ''}, ${h.totalMB} MB, ${h.platform}/${h.arch}${h.cgroup ? `, container limits ${JSON.stringify(h.cgroup)}` : ''}`);
+  if (x) console.log(`now: load ${x.load1?.toFixed?.(2) ?? '?'}, ${x.availMB ?? '?'} MB available, pressure ${x.pressure ?? 'unknown'}${Number.isFinite(x.swapMBps) ? `, swap-in ${x.swapMBps.toFixed(1)} MB/s` : ''}${Number.isFinite(x.cpuSpeedLimit) ? `, CPU limit ${x.cpuSpeedLimit}%` : ''}${x.errors?.length ? ` (unread: ${x.errors.join(', ')})` : ''}`);
+  console.log(`adaptive ${m.mode}: ${m.limit.cpu} token(s)${m.limit.memMB !== null ? `, ${m.limit.memMB} MB` : ''}${m.limit.why?.length ? ` — ${m.limit.why.join('; ')}` : ''}`);
+  console.log(`defaults here: ${m.policy.defaultTokenMB} MB per token, ${m.policy.headroomMB} MB kept free`);
+  for (const l of m.leases) console.log(`  ${l.id}: pid ${l.pid}, ${l.currentMB ?? '?'} MB now, peak ${l.peakMB} MB, reserved ${l.reservedMB} MB`);
 }
 
 const cmd = process.argv[2];
@@ -71,6 +88,7 @@ try {
   else if (cmd === 'replay') replay(o);
   else if (cmd === 'run') process.exitCode = runLane(o, rest);
   else if (cmd === 'lease') process.exitCode = await (await import('./broker/client.mjs')).lease(o, rest);
+  else if (cmd === 'machine') printMachine(await (await import('./broker/client.mjs')).call({ op: 'machine' }), o.json);
   else if (cmd === 'queue') printQueue(await (await import('./broker/client.mjs')).call({ op: 'status' }), o.json);
   else if (cmd === 'explain') {
     const id = process.argv[3];

@@ -30,7 +30,12 @@ merge trains, background pre-gating, measurements, deploy builds, and every AI a
 session's test runs. Agents reach it over MCP. See [Broker](#broker) and
 [docs/design/broker.md](docs/design/broker.md).
 
-The model-assisted phases (1–3) are not started. Version 0.2.0, not yet published to npm.
+**Phase 0.6 is done: adaptive capacity.** The broker samples CPU, memory, memory
+pressure, swap and heat, and grants each job only the workers and memory the machine can
+take right now. Every default derives from the host, so one config serves a laptop and a
+64-core runner. See [Adaptive capacity](#adaptive-capacity).
+
+The model-assisted phases (1–3) are not started. Version 0.3.0, not yet published to npm.
 
 ## The idea in one paragraph
 
@@ -188,7 +193,8 @@ tracegate explain j42    # why j42 waits, and when it is reserved to start
 - **The first `lease` starts the broker** in the background. It stops after 30 idle
   minutes.
 - **What the command gets:** `TRACEGATE_TOKENS` and `VITEST_MAX_WORKERS`, set to its
-  grant. `tracegate run` sizes Vitest to the grant.
+  grant, and `TRACEGATE_CONTENDED=1` when it was started on a busy machine.
+  `tracegate run` sizes Vitest to the grant.
 - **Nested leases run inside their parent.** A lease taken inside another lease runs at
   once within the parent's tokens, so a job can never queue behind itself.
 - **Liveness is the connection.** A lease ends when its holder's process ends, SIGKILL
@@ -209,11 +215,52 @@ Configure in `tracegate.config.json`:
               "advisor": { "command": "node ./advisor.mjs", "mode": "shadow" } } }
 ```
 
+### Adaptive capacity
+
+The broker sizes work to the machine as it is now, not as it was configured:
+
+```sh
+# Ask for up to 8 workers and accept as few as 2. On a busy machine it starts narrower
+# instead of waiting; on a quiet one it gets all 8.
+tracegate lease --class gate --tokens 8 --min-tokens 2 -- tracegate run --lane api
+
+tracegate machine        # hardware, the latest reading, the budgets and why
+```
+
+- **Two budgets, every 5 s.**
+  - **cpu:** the configured capacity minus busy cores that are not ours. A thermal limit
+    scales it, and memory pressure caps it.
+  - **memory:** available memory minus a headroom, minus growth our running jobs have
+    reserved but not yet used.
+- **A budget goes down at once and comes back up slowly** (30 s hold, one token per
+  step), because contention makes reds that look like bugs.
+- **Memory per job is learned** from the measured peak of each job's process tree.
+  `--mem-per-token MB` declares it up front.
+- **Under memory pressure, preemptible work (the daemon) is shed.** A gate is never
+  stopped for load.
+- **A job held back only by someone else's load** runs anyway after 5 minutes, flagged
+  `TRACEGATE_CONTENDED=1` ("a red here is not evidence").
+- **Different machines:**
+  - The defaults derive from each host's cores and RAM, and a container's CPU quota and
+    memory limit count.
+  - The broker's state is kept per host.
+  - Override one machine with `"hosts"`.
+  - Try a policy first with `"mode": "shadow"`: it logs what it would do and changes
+    nothing.
+
+```json
+{ "broker": { "capacity": "75%",
+              "adaptive": { "mode": "on", "upHoldS": 30, "starvationS": 300 },
+              "hosts": { "ci-runner-1": { "capacity": 32, "adaptive": { "headroomMB": 4096 } } } } }
+```
+
+Details and the per-platform signals: [docs/design/broker.md §9](docs/design/broker.md#9-adaptive-capacity-phase-06).
+
 ### For AI agents (MCP)
 
 `tracegate mcp` is a Model Context Protocol server over stdio.
 
-- **Read-only tools:** `queue_status`, `explain_job`, `history` and `lane_mode`.
+- **Read-only tools:** `queue_status`, `explain_job`, `history`, `machine_load` and `lane_mode`.
 - **With `--allow-write`:** `cancel_queued` (queued jobs only).
 
 Register it with Claude Code:
@@ -263,7 +310,7 @@ Any change to an unmapped module means "run", so predictions stay safe but get c
 
 ```sh
 npm install                 # typescript, for parsing
-npm test                    # the self-test: 77 checks in a throwaway git repo
+npm test                    # the self-test (77 checks), the broker (50) and adaptive capacity (74)
 node test/sabotage.mjs      # breaks each rule in a temp copy; each must turn the self-test red
 bash examples/e2e.sh        # end-to-end on examples/sample-repo (needs network for npm install)
 ```

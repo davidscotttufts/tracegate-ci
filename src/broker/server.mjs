@@ -9,13 +9,20 @@
 // <ledger>/broker/events.jsonl BEFORE it is acted on. On start the log is
 // replayed; jobs a previous broker left queued or running are closed with
 // reason `broker-restart` (their connections died with it).
+//
+// Adaptive capacity (I9): every `sampleSeconds` it reads the machine (sampler.mjs)
+// and the memory of each lease's process tree, asks adapt.mjs for the budgets,
+// and logs a `capacity` event when they change. Each release records the peak
+// memory of the job's tree, which is what the next run of that job reserves.
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
-import { apply, explain, initialState, queueOf, schedule, snapshot } from './core.mjs';
+import { adapt, changed, deriveDefaults } from './adapt.mjs';
+import { apply, explain, initialState, queueOf, runningOf, schedule, snapshot } from './core.mjs';
 import { brokerConfig, brokerDir, socketPath } from './paths.mjs';
+import { hardware, sample } from './sampler.mjs';
 
 const ADVISOR_TIMEOUT_MS = 10_000;
 
@@ -27,8 +34,12 @@ export async function serve({ quiet = false } = {}) {
   const sock = socketPath();
   const log = (...a) => { if (!quiet) console.log(new Date().toISOString(), ...a); };
 
+  // Every memory default is a share of THIS machine (the config is shared by all).
+  const hw = await hardware();
+  const policy = deriveDefaults(cfg.adaptive, hw);
+
   // ── replay ────────────────────────────────────────────────────────────────
-  const st = initialState({ capacity: cfg.capacity, classes: cfg.classes });
+  const st = initialState({ capacity: cfg.capacity, classes: cfg.classes, defaultTokenMB: policy.defaultTokenMB, starvationS: policy.starvationS });
   if (fs.existsSync(logFile)) {
     for (const line of fs.readFileSync(logFile, 'utf8').split('\n')) {
       if (!line.trim()) continue;
@@ -43,10 +54,15 @@ export async function serve({ quiet = false } = {}) {
   };
   for (const j of [...st.jobs.values()]) emit({ type: j.state === 'running' ? 'release' : 'cancel', id: j.id, reason: 'broker-restart' });
   if (st.capacity !== cfg.capacity) st.capacity = cfg.capacity; // config wins over the log
+  // A limit from a previous broker's last sample is stale: start from the full
+  // capacity, logged, so a replay of this log sees the same reset (I8).
+  emit({ type: 'capacity', cpu: st.capacity, memMB: null, pressure: null, why: ['broker start'], applied: true,
+    host: cfg.host, hw: { cores: hw.cores, perfCores: hw.perfCores, totalMB: hw.totalMB, arch: hw.arch, platform: hw.platform, cgroup: hw.cgroup } });
 
   // ── connections ───────────────────────────────────────────────────────────
   const conns = new Map(); // socket → { owner, jobs: Set<id> }
   const ownerOf = new Map(); // job id → socket
+  const trees = new Map(); // job id → { pid, currentMB, peakMB }: its holder's process tree
   const send = (s, msg) => { try { s.write(JSON.stringify(msg) + '\n'); } catch { /* closed */ } };
 
   const endJob = (id, type, reason) => {
@@ -54,7 +70,9 @@ export async function serve({ quiet = false } = {}) {
     if (!j) return;
     // Children first: their authority came from this job.
     for (const c of [...st.jobs.values()]) if (c.parent === id) endJob(c.id, c.state === 'running' ? 'release' : 'cancel', 'parent-ended');
-    emit({ type, id, reason });
+    const peak = trees.get(id)?.peakMB;
+    emit({ type, id, reason, ...(type === 'release' && Number.isFinite(peak) && peak > 0 ? { peakMB: peak } : {}) });
+    trees.delete(id);
     const s = ownerOf.get(id);
     if (s && reason !== 'done' && reason !== 'holder-exited') send(s, { type: 'ended', id, reason });
     ownerOf.delete(id);
@@ -71,10 +89,15 @@ export async function serve({ quiet = false } = {}) {
         // endJob tells the holder (`ended`, reason `deadline`).
         for (const id of d.expires) endJob(id, 'expire', 'deadline');
         for (const g of d.grants) {
-          const e = emit({ type: 'grant', id: g.id, tokens: g.tokens, nested: g.nested });
+          const e = emit({ type: 'grant', id: g.id, tokens: g.tokens, nested: g.nested, ...(g.memMB ? { memMB: g.memMB } : {}), ...(g.contended ? { contended: true } : {}) });
           const j = st.jobs.get(g.id);
-          log(`grant ${g.id} ${j.class} ${j.label} tokens=${g.tokens} fence=${j.fence}${g.nested ? ' (nested)' : ''}`);
-          const s = ownerOf.get(g.id); if (s) send(s, { type: 'granted', id: g.id, tokens: g.tokens, fence: j.fence, nested: g.nested, at: e.at });
+          log(`grant ${g.id} ${j.class} ${j.label} tokens=${g.tokens}${g.memMB ? ` mem=${g.memMB}MB` : ''} fence=${j.fence}${g.nested ? ' (nested)' : ''}${g.contended ? ' CONTENDED' : ''}`);
+          const s = ownerOf.get(g.id);
+          if (s) {
+            const pid = conns.get(s)?.pid;
+            if (!g.nested && pid) trees.set(g.id, { pid, currentMB: null, peakMB: 0 });
+            send(s, { type: 'granted', id: g.id, tokens: g.tokens, fence: j.fence, nested: g.nested, memMB: g.memMB ?? 0, contended: !!g.contended, at: e.at });
+          }
         }
         for (const p of d.preempts) {
           emit({ type: 'preempt', id: p.id, by: p.by });
@@ -124,17 +147,52 @@ export async function serve({ quiet = false } = {}) {
     child.stdin.end(JSON.stringify(input));
   };
 
+  // ── adaptive capacity (I9) ────────────────────────────────────────────────
+  let lastSample = null; let decision = null; let logged = null; let sampling = false;
+  const resample = async () => {
+    if (sampling) return; sampling = true;
+    try {
+      const smp = await sample([...new Set([...trees.values()].map((t) => t.pid))]);
+      lastSample = smp;
+      let growthMB = 0;
+      for (const [id, t] of trees) {
+        const mb = smp.trees?.[t.pid];
+        if (Number.isFinite(mb)) { t.currentMB = mb; t.peakMB = Math.max(t.peakMB, mb); }
+        const j = st.jobs.get(id);
+        if (j) growthMB += Math.max(0, j.reservedMB - (Number.isFinite(mb) ? mb : 0));
+      }
+      const run = runningOf(st).filter((j) => !j.nested);
+      // A lease whose holder sent no pid cannot be measured: count all of its reservation as still to come.
+      for (const j of run) if (!trees.has(j.id)) growthMB += j.reservedMB;
+      const ours = { usedTokens: run.reduce((a, j) => a + j.granted, 0), reservedMB: run.reduce((a, j) => a + j.reservedMB, 0), growthMB };
+      if (policy.mode === 'off') return;
+      decision = adapt(policy, smp, decision, ours, st.capacity, Date.now());
+      if (changed(logged, decision, policy.memQuantumMB)) {
+        const applied = policy.mode === 'on';
+        emit({ type: 'capacity', cpu: decision.cpu, memMB: Number.isFinite(decision.memMB) ? Math.round(decision.memMB) : null, pressure: decision.pressure, why: decision.why, applied });
+        logged = { cpu: decision.cpu, memMB: decision.memMB, pressure: decision.pressure };
+        log(`capacity ${applied ? '' : '(shadow) '}cpu=${decision.cpu}/${st.capacity} mem=${Number.isFinite(decision.memMB) ? Math.round(decision.memMB) + 'MB' : '∞'}${decision.pressure ? ` pressure=${decision.pressure}` : ''}${decision.why.length ? ` — ${decision.why.join('; ')}` : ''}`);
+        tick();
+      }
+    } catch (e) { log(`sample failed: ${e.message}`); } finally { sampling = false; }
+  };
+
   const handle = (s, msg) => {
     const c = conns.get(s);
     const now = Date.now();
     switch (msg.op) {
-      case 'hello': c.owner = String(msg.owner ?? c.owner); send(s, { type: 'hello', capacity: st.capacity, pid: process.pid }); break;
+      case 'hello':
+        c.owner = String(msg.owner ?? c.owner);
+        if (Number.isInteger(msg.pid) && msg.pid > 1) c.pid = msg.pid; // whose process tree to measure
+        send(s, { type: 'hello', capacity: st.capacity, pid: process.pid }); break;
       case 'request': {
         const tokens = Number.isInteger(msg.tokens) && msg.tokens > 0 ? Math.min(msg.tokens, st.capacity) : 1;
         if (msg.class && !st.classes[msg.class]) { send(s, { type: 'error', ref: msg.ref, error: `unknown class ${msg.class}; known: ${Object.keys(st.classes).join(', ')}` }); break; }
         const parent = typeof msg.parent === 'string' && st.jobs.get(msg.parent)?.state === 'running' ? msg.parent : null;
         const id = `j${st.jobNo + 1}`;
         emit({ type: 'enqueue', id, owner: c.owner, class: msg.class ?? 'adhoc', label: String(msg.label ?? '').slice(0, 200), tokens,
+          ...(Number.isInteger(msg.minTokens) && msg.minTokens > 0 && msg.minTokens < tokens ? { minTokens: msg.minTokens } : {}),
+          ...(Number.isFinite(msg.memPerToken) && msg.memPerToken > 0 ? { memPerToken: msg.memPerToken } : {}),
           exclusive: !!msg.exclusive, est: Number.isFinite(msg.est) && msg.est > 0 ? msg.est : null, parent,
           deadline: Number.isFinite(msg.deadline) ? msg.deadline : null });
         ownerOf.set(id, s); c.jobs.add(id);
@@ -156,6 +214,14 @@ export async function serve({ quiet = false } = {}) {
       }
       case 'status': send(s, { type: 'status', ref: msg.ref, ...snapshot(st, now), pid: process.pid, socket: sock, log: logFile }); break;
       case 'explain': send(s, { type: 'explain', ref: msg.ref, ...explain(st, String(msg.id), now) }); break;
+      case 'machine': {
+        const { trees: _t, ...reading } = lastSample ?? {};
+        send(s, { type: 'machine', ref: msg.ref, host: cfg.host, hw, mode: policy.mode,
+          policy: { ...policy }, sample: lastSample ? reading : null,
+          limit: snapshot(st, now).limit, shadowLimit: snapshot(st, now).shadowLimit,
+          leases: [...trees].map(([id, t]) => ({ id, pid: t.pid, currentMB: t.currentMB, peakMB: t.peakMB, reservedMB: st.jobs.get(id)?.reservedMB ?? 0 })) });
+        break;
+      }
       case 'history': {
         const n = Math.min(Math.max(1, msg.n | 0 || 50), 1000);
         const lines = fs.readFileSync(logFile, 'utf8').trim().split('\n').slice(-n).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
@@ -190,10 +256,14 @@ export async function serve({ quiet = false } = {}) {
     s.on('close', gone); s.on('error', gone);
   });
 
+  // The first budget is decided BEFORE the socket opens: a request that arrived
+  // earlier would be granted against the full configured capacity.
+  await resample();
   await listen(server, sock);
   fs.writeFileSync(path.join(dir, 'broker.pid'), String(process.pid));
-  log(`tracegate broker: pid ${process.pid}, capacity ${st.capacity}, socket ${sock}`);
+  log(`tracegate broker: pid ${process.pid}, capacity ${st.capacity}, ${hw.cores} cores${hw.perfCores ? ` (${hw.perfCores} performance)` : ''}, ${hw.totalMB} MB${hw.cgroup ? ' (container limits)' : ''}, adaptive ${policy.mode}, socket ${sock}`);
   const timer = setInterval(tick, 1000); timer.unref();
+  const sampler = setInterval(resample, Math.max(1, policy.sampleSeconds) * 1000); sampler.unref();
 
   // Idle exit: no connections and no jobs for idleMinutes (0 = never).
   let idleSince = Date.now();
@@ -204,7 +274,7 @@ export async function serve({ quiet = false } = {}) {
   idle.unref();
   const shutdown = (why) => {
     log(`tracegate broker: stopping (${why})`);
-    clearInterval(timer); clearInterval(idle);
+    clearInterval(timer); clearInterval(idle); clearInterval(sampler);
     server.close(); try { fs.unlinkSync(sock); } catch { /* gone */ }
     for (const s of conns.keys()) s.destroy();
     process.exit(0);

@@ -32,6 +32,7 @@ function vitest(ln, args, env) {
 
 export function runLane(o, userArgs) {
   const ln = lane(o.lane);
+  if (process.env.TRACEGATE_CONTENDED === '1') console.log(`\x1b[33mtracegate (${ln.name}): running CONTENDED — the broker started this past its starvation limit on a busy machine. A red here is not evidence until it reproduces on a quiet one.\x1b[0m`);
   const c = ctx();
   const mode = o.mode && o.mode !== true ? o.mode : effectiveMode(ln.name);
   if (mode === 'off') return vitest(ln, userArgs, { TRACEGATE_RECORD: '' });

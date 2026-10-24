@@ -10,7 +10,7 @@
 import { call } from './broker/client.mjs';
 
 const SUPPORTED = ['2025-06-18', '2025-03-26', '2024-11-05'];
-const pkg = { name: 'tracegate', version: '0.2.0' };
+const pkg = { name: 'tracegate', version: '0.3.0' };
 
 const READ_TOOLS = [
   {
@@ -33,6 +33,13 @@ const READ_TOOLS = [
     inputSchema: { type: 'object', properties: { n: { type: 'integer', minimum: 1, maximum: 1000, default: 50 } }, additionalProperties: false },
     annotations: { readOnlyHint: true },
     run: async ({ n }) => (await call({ op: 'history', n: n ?? 50 })).events,
+  },
+  {
+    name: 'machine_load',
+    description: 'This machine\'s hardware (cores, performance cores, RAM, container limits), its latest load / available memory / memory pressure / swap / thermal reading, and the cpu and memory budgets the broker is handing out right now, with the reasons. Each running lease\'s measured memory is included. Read it before starting heavy work, and size a lease with --min-tokens so it can start narrower on a busy machine.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true },
+    run: async () => { const m = await call({ op: 'machine' }); delete m.ref; delete m.type; return m; },
   },
   {
     name: 'lane_mode',
@@ -81,7 +88,7 @@ export async function mcp(o) {
         if (m.method === 'initialize') {
           const asked = m.params?.protocolVersion;
           reply(m.id, { protocolVersion: SUPPORTED.includes(asked) ? asked : SUPPORTED[0], capabilities: { tools: {} }, serverInfo: pkg,
-            instructions: 'Coordinate CI work on this machine through the Tracegate broker. Read queue_status before starting heavy work; run the work itself with `tracegate lease --class <c> --tokens <n> -- <command>` in your shell so it waits its turn.' });
+            instructions: 'Coordinate CI work on this machine through the Tracegate broker. Read queue_status (and machine_load for the cpu/memory budgets) before starting heavy work; run the work itself with `tracegate lease --class <c> --tokens <n> [--min-tokens <m>] -- <command>` in your shell so it waits its turn and is sized to what the machine can take.' });
         } else if (m.method === 'ping') reply(m.id, {});
         else if (m.method === 'tools/list') reply(m.id, { tools: tools.map(({ run, ...t }) => t) });
         else if (m.method === 'tools/call') {

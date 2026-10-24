@@ -191,6 +191,40 @@ The full analysis is in [docs/design/broker.md](docs/design/broker.md).
 **Next (0.5b):** adopt it in the host project and retire the eight mechanisms one by one.
 Exit: two weeks with no coordination incident.
 
+### Phase 0.6 — Adaptive capacity: size work to the machine as it is now (done, v0.3.0)
+
+**Why.** A fixed token count cannot see work the broker does not run: another
+checkout's suite, a build, a browser. In the host project, a worker pool sized for a
+quiet machine produced reds that read as real bugs. One configuration also has to
+serve machines with very different hardware.
+
+**What shipped:**
+- **A sampler for macOS, Linux and containers:** busy cores, available memory, the
+  kernel's memory pressure, swap-in rate, thermal limit, and the memory of each lease's
+  process tree.
+- **A pure policy giving two budgets, cpu and memory.** A budget goes down at once and
+  comes back up slowly.
+- **Elastic grants:** `--min-tokens`.
+- **Memory per job learned** from measured peaks.
+- **Shedding:** only preemptible work is stopped.
+- **A starvation guard:** after a wait, a job runs anyway, flagged contended.
+- **Every default derives from the host's cores and RAM.** Per-host overrides and a
+  per-host broker state complete this.
+- **Inspection:** `tracegate machine` and the MCP tool `machine_load`.
+
+Design: [docs/design/broker.md §9](docs/design/broker.md#9-adaptive-capacity-phase-06).
+
+**Tests:**
+- **74 adaptive tests.** These cover the parsers on fixtures from 16 KB-page and 4 KB-page
+  machines, the policy on five hardware profiles, and the scheduler under budgets. A
+  live broker fed recorded samples checks real process-tree measurement, shedding, and
+  the contended start.
+- **14 new sabotage witnesses.** One caught a shedding test that could not fail, which
+  is now fixed.
+- **Two bugs found before release:**
+  - critical pressure leaked memory freed by a shed job to the next grant;
+  - a request that raced the broker's first sample got the full capacity.
+
 ### Phase 1 — Red Reader: an escalate-only opinion on every red (first model decision)
 
 - **When it runs:** after the gate re-runs a miss alone and it passes. Today that would be

@@ -206,9 +206,16 @@ function sim(capacity) {
 
 // ── Part 2: a live broker ─────────────────────────────────────────────────────
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-broker-test-'));
-const env = { ...process.env, TRACEGATE_BROKER_DIR: path.join(tmp, 'broker'), TRACEGATE_BROKER_SOCKET: path.join(tmp, 's.sock'), TRACEGATE_BROKER_CAPACITY: '2' };
+const env = { ...process.env, TRACEGATE_BROKER_DIR: path.join(tmp, 'broker'), TRACEGATE_BROKER_SOCKET: path.join(tmp, 's.sock'), TRACEGATE_BROKER_CAPACITY: '2', TRACEGATE_BROKER_ADAPTIVE: 'off' };
 delete env.TRACEGATE_LEASE;
-const broker = spawn(process.execPath, [CLI, 'broker', 'serve'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+// Every broker this test starts is stopped however the test ends, including when a
+// harness kills it on a timeout (a sabotaged rule can make a check wait forever).
+const started = new Set();
+const stopAll = () => { for (const p of started) { try { p.kill('SIGKILL'); } catch { /* gone */ } } };
+process.on('exit', stopAll);
+for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(sig, () => { stopAll(); process.exit(1); });
+const startBroker = (e, stdio) => { const p = spawn(process.execPath, [CLI, 'broker', 'serve'], { env: e, stdio }); started.add(p); p.on('exit', () => started.delete(p)); return p; };
+const broker = startBroker(env, ['ignore', 'pipe', 'pipe']);
 let brokerOut = ''; broker.stdout.on('data', (d) => { brokerOut += d; }); broker.stderr.on('data', (d) => { brokerOut += d; });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 for (let i = 0; i < 50 && !fs.existsSync(env.TRACEGATE_BROKER_SOCKET); i++) await sleep(100);
@@ -303,7 +310,7 @@ async function withAdvisor(name, advisorJs, mode, fn) {
   const cfg = path.join(dir, 'tracegate.config.json');
   fs.writeFileSync(cfg, JSON.stringify({ broker: { advisor: { command: `${JSON.stringify(process.execPath)} ${JSON.stringify(script)}`, mode } } }));
   const e = { ...env, TRACEGATE_CONFIG: cfg, TRACEGATE_BROKER_DIR: path.join(dir, 'broker'), TRACEGATE_BROKER_SOCKET: path.join(dir, 's.sock'), TRACEGATE_BROKER_CAPACITY: '1' };
-  const b = spawn(process.execPath, [CLI, 'broker', 'serve'], { env: e, stdio: 'ignore' });
+  const b = startBroker(e, 'ignore');
   for (let i = 0; i < 50 && !fs.existsSync(e.TRACEGATE_BROKER_SOCKET); i++) await sleep(100);
   const conn = () => new Promise((resolve) => {
     const s = net.connect(e.TRACEGATE_BROKER_SOCKET); let buf = ''; const msgs = [];

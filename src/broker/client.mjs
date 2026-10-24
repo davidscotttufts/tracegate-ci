@@ -76,11 +76,14 @@ export async function call(msg, opts) {
 }
 
 /**
- * `tracegate lease [--class c] [--tokens n] [--exclusive] [--est s] [--label l]
- *                  [--deadline-min m] [--requeue] -- <command…>`
+ * `tracegate lease [--class c] [--tokens n] [--min-tokens m] [--mem-per-token MB]
+ *                  [--exclusive] [--est s] [--label l] [--deadline-min m] [--requeue] -- <command…>`
  * Waits for a grant, runs the command with TRACEGATE_LEASE / TRACEGATE_FENCE /
- * TRACEGATE_TOKENS / VITEST_MAX_WORKERS set, releases on exit, forwards the exit
- * code. Preempted: SIGTERM to the command's process group, exit 75 (or requeue).
+ * TRACEGATE_TOKENS / VITEST_MAX_WORKERS (the granted width, which under adaptive
+ * capacity may be less than --tokens and no less than --min-tokens), and
+ * TRACEGATE_CONTENDED=1 when the broker started it on a busy machine past its
+ * starvation limit. Releases on exit, forwards the exit code. Preempted: SIGTERM
+ * to the command's process group, exit 75 (or requeue).
  */
 export async function lease(o, argv) {
   if (!argv.length) throw new Error('lease: nothing to run (put the command after --)');
@@ -88,6 +91,8 @@ export async function lease(o, argv) {
     op: 'request',
     class: o.class && o.class !== true ? o.class : 'adhoc',
     tokens: o.tokens !== undefined ? Number(o.tokens) : 1,
+    minTokens: o['min-tokens'] !== undefined ? Number(o['min-tokens']) : undefined,
+    memPerToken: o['mem-per-token'] !== undefined ? Number(o['mem-per-token']) : undefined,
     exclusive: !!o.exclusive,
     est: o.est !== undefined ? Number(o.est) : undefined,
     label: o.label && o.label !== true ? o.label : argv.join(' ').slice(0, 120),
@@ -98,7 +103,7 @@ export async function lease(o, argv) {
   const say = (m) => { if (!quiet) process.stderr.write(`tracegate lease: ${m}\n`); };
   for (;;) {
     const c = await connect();
-    c.send({ op: 'hello', owner: `${process.pid}` });
+    c.send({ op: 'hello', owner: `${process.pid}`, pid: process.pid });
     const rc = await new Promise((resolve) => {
       let id = null; let child = null; let preempted = false; let lastSay = 0;
       c.on((m) => {
@@ -109,10 +114,13 @@ export async function lease(o, argv) {
           id = m.id;
         } else if (m.type === 'granted' && m.id === (id ?? m.id) && !child) {
           id = m.id;
-          say(`${id} granted ${m.tokens} token(s), fence ${m.fence}${m.nested ? ' (inside the parent lease)' : ''}`);
+          say(`${id} granted ${m.tokens} token(s)${m.memMB ? ` and ${m.memMB} MB` : ''}, fence ${m.fence}${m.nested ? ' (inside the parent lease)' : ''}`);
+          if (m.contended) say(`${id} starts CONTENDED: the machine stayed busy past the starvation limit, so a red here is not evidence on its own`);
+          const contended = m.contended || process.env.TRACEGATE_CONTENDED === '1';
           child = spawn(argv[0], argv.slice(1), {
             stdio: 'inherit', detached: true,
-            env: { ...process.env, TRACEGATE_LEASE: id, TRACEGATE_FENCE: String(m.fence), TRACEGATE_TOKENS: String(m.tokens), VITEST_MAX_WORKERS: String(m.tokens) },
+            env: { ...process.env, TRACEGATE_LEASE: id, TRACEGATE_FENCE: String(m.fence), TRACEGATE_TOKENS: String(m.tokens), VITEST_MAX_WORKERS: String(m.tokens),
+              ...(contended ? { TRACEGATE_CONTENDED: '1' } : {}) },
           });
           const fwd = (sig) => { try { process.kill(-child.pid, sig); } catch { /* gone */ } };
           process.on('SIGINT', () => fwd('SIGINT'));
