@@ -1,0 +1,126 @@
+#!/usr/bin/env node
+// Sabotage witnesses: break one rule at a time and check the self-test goes RED.
+//
+// A test that stays green when the rule it guards is broken guards nothing. For
+// each entry below, this copies the package to a temp dir, applies ONE textual
+// mutation to src/, runs test/selftest.mjs there and expects (a) a non-zero exit
+// and (b) the named check among the failures. The working tree is never touched.
+//
+//   node test/sabotage.mjs            all witnesses
+//   node test/sabotage.mjs <id> ...   only these
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const PKG = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+// [id, file, exact text to replace, replacement, a check that must go red]
+// The text/replacement may be arrays, for a rule implemented at more than one site.
+const WITNESSES = [
+  ['column-narrowing', 'src/predictor.mjs',
+    'r0 = p; r1 = o.length - q; a0 = p; a1 = n.length - q;', 'r0 = 0; r1 = o.length; a0 = 0; a1 = n.length;',
+    'SKIP callback body only, on that shared line'],
+  ['every-owner-of-a-line', 'src/model.mjs',
+    'owner.fill(id(key), n.getStart(sf), n.getEnd());', 'owner.fill(id(key), n.getStart(sf), n.getStart(sf) + 1);',
+    'SKIP body of a function the test never ran'],
+  ['local-ctor-is-not-pure', 'src/model.mjs',
+    'return !localBindings(sf).has(init.expression.text);', 'return true;',
+    'RUN  a Set built by a LOCALLY bound constructor'],
+  ['constants-are-inputs', 'src/predictor.mjs',
+    "if (consts.has(`${p}::${k.slice(7, -1)}`)) return `constant ${k.slice(7, -1)} in ${p}`; continue;", 'continue;',
+    'RUN  constant an executed function reads'],
+  ['top-level-is-an-input', 'src/predictor.mjs',
+    "if (k === '<top>') return `top-level change in ${p}`;", "if (k === '<top>') continue;",
+    'RUN  top-level statement of a loaded module'],
+  ['read-inputs', 'src/predictor.mjs',
+    'for (const r of reads) if (r === p || p.startsWith(r + \'/\')) return `read input ${p}`;', '',
+    'RUN  a repo file the test read'],
+  ['globals', 'src/predictor.mjs',
+    'if (ln.global.test(p) && !isTestFile(p)) return `global input ${p}`;', '',
+    'RUN  a setup file (lane global from the config)'],
+  ['test-file-is-not-global', 'src/predictor.mjs',
+    'if (ln.global.test(p) && !isTestFile(p))', 'if (ln.global.test(p))',
+    'SKIP a test file that lives in the setup directory'],
+  ['lockfile', 'src/predictor.mjs',
+    "if (fp.lock !== lock && !REPLAY.ignoreLock) return 'lockfile changed';", '',
+    'replay reproduces decide() at the same head and clock'],
+  ['node-version', 'src/predictor.mjs',
+    'if (fp.node !== nodeVersion) return `node ${fp.node} → ${nodeVersion}`;', '',
+    'RUN  different node version'],
+  ['max-age', 'src/predictor.mjs',
+    'if (!(ageH <= maxAge)) return', 'if (false) return',
+    'RUN  a footprint older than 72 h, even on an unchanged tree'],
+  ['fp-version', 'src/predictor.mjs',
+    "if (fp.v !== FP_VERSION) return 'footprint format changed';", '',
+    'RUN  a footprint of another format version'],
+  ['ingest-refuses-dirty', 'src/predictor.mjs',
+    "if (dirty) { console.log", "if (false) { console.log",
+    'ingest refuses a dirty working tree (records nothing)'],
+  ['ingest-refuses-moved', 'src/predictor.mjs',
+    "o['expect-head'] !== H)", "o['expect-head'] === '')",
+    'ingest refuses a tree that moved during the run (--expect-head)'],
+  ['ingest-drops-red', 'src/predictor.mjs',
+    "if (verdict.status !== 'passed') { dropFps(ln.name, raw.testFile); dropped++; continue; }", '',
+    'ingest drops every footprint of a file that FAILED'],
+  // Both sites drop a missed footprint (the second is belt and braces), so
+  // the property only breaks when both go.
+  ['miss-drops-footprint', 'src/predictor.mjs',
+    ["for (const [f, r] of results) if (r.status === 'failed') dropFps(ln.name, f);", 'for (const m of misses) dropFps(ln.name, m);'], ['', ''],
+    '...and the footprint that lied is dropped'],
+  ['report-drops-red', 'src/predictor.mjs',
+    "for (const [f, r] of results) if (r.status === 'failed') dropFps(ln.name, f);", '',
+    'report drops the footprints of a failed file that was predicted to run (not a miss)'],
+  ['audit-is-random', 'src/predictor.mjs',
+    "if (mode === 'enforce' && Math.random() < auditRate)", "if (mode === 'enforce' && auditRate > 0)",
+    'enforce + audit 0.5: about half of 100 selections audit the file (25..75)'],
+  ['miss-suspends', 'src/predictor.mjs',
+    'const ok = spanDays >= bar.days && obs.length >= bar.observations && !recentMiss;', 'const ok = spanDays >= bar.days && obs.length >= bar.observations;',
+    '...but a recent un-triaged MISS suspends a lane that otherwise meets the bar'],
+  ['miss-suspension-window', 'src/predictor.mjs',
+    'now - Date.parse(m.at) < c.missSuspendDays * day', 'true',
+    '...and a miss older than the suspension window no longer does'],
+  ['only-flake-lifts', 'src/predictor.mjs',
+    "readTsv('triage-').filter((t) => t.verdict === 'flake')", "readTsv('triage-')",
+    'a miss triaged as a HOLE still suspends enforcement'],
+  ['early-entry-floor', 'src/predictor.mjs',
+    'const ok = spanDays >= bar.days &&', 'const ok =',
+    'web does NOT enter on 20 observations inside 12 hours (the 1-day floor)'],
+  ['early-audit-rate', 'src/predictor.mjs',
+    'bar.earlyAudit !== undefined ? bar.earlyAudit : c.audit', 'false ? bar.earlyAudit : c.audit',
+    '...auditing 20% until the default 14-day bar would have been met'],
+  ['full-run-backstop', 'src/predictor.mjs',
+    'if (h >= maxH) {', 'if (false) {',
+    'backstop: no full run ever recorded → FULL'],
+  ['ingest-budget', 'src/predictor.mjs',
+    'if (Date.now() - t0 > budgetMs) { overBudget++; continue; }', '',
+    'ingest past its time budget records nothing (no partial footprint)'],
+];
+
+const only = process.argv.slice(2);
+const todo = only.length ? WITNESSES.filter((w) => only.includes(w[0])) : WITNESSES;
+let bad = 0;
+for (const [id, file, from, to, mustFail] of todo) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `tracegate-sabotage-${id}-`));
+  fs.cpSync(path.join(PKG, 'src'), path.join(dir, 'src'), { recursive: true });
+  fs.cpSync(path.join(PKG, 'test'), path.join(dir, 'test'), { recursive: true });
+  fs.copyFileSync(path.join(PKG, 'package.json'), path.join(dir, 'package.json'));
+  fs.symlinkSync(path.join(PKG, 'node_modules'), path.join(dir, 'node_modules'));
+  const f = path.join(dir, file);
+  let text = fs.readFileSync(f, 'utf8');
+  const froms = [from].flat(), tos = [to].flat();
+  const counts = froms.map((x) => text.split(x).length - 1);
+  if (counts.some((n) => n !== 1)) { console.log(`  ✗ ${id}: a mutation anchor occurs ${JSON.stringify(counts)} times in ${file} (expected 1 each) — update the witness`); bad++; fs.rmSync(dir, { recursive: true, force: true }); continue; }
+  froms.forEach((x, i) => { text = text.replace(x, () => tos[i]); });
+  fs.writeFileSync(f, text);
+  const r = spawnSync(process.execPath, [path.join(dir, 'test', 'selftest.mjs')], { encoding: 'utf8', env: { ...process.env, TRACEGATE_SELFTEST_VERBOSE: '' } });
+  const failed = (r.stdout ?? '').split('\n').filter((l) => l.trimStart().startsWith('✗')).map((l) => l.trim().slice(2));
+  const hit = failed.some((l) => l.startsWith(mustFail));
+  const ok = r.status !== 0 && hit;
+  if (!ok) bad++;
+  console.log(`  ${ok ? '✓' : '✗'} ${id.padEnd(24)} ${ok ? `red (${failed.length} check(s) failed, incl. "${mustFail}")` : `NOT witnessed: exit ${r.status}, failed: ${JSON.stringify(failed)}`}`);
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+console.log(bad ? `\n== sabotage: ${bad} of ${todo.length} rules NOT witnessed ==` : `\n== sabotage: ${todo.length} of ${todo.length} rules witnessed red ==`);
+process.exit(bad ? 1 : 0);

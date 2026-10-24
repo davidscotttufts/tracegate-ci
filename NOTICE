@@ -1,0 +1,12 @@
+Tracegate CI
+Copyright 2026 David Tufts
+
+This product is derived from Tracegate, a test-impact gate originally developed
+in the openwop-app project and licensed under the Apache License, Version 2.0:
+
+  Tracegate
+  Copyright 2026 David Tufts and openwop contributors
+
+The recorder, the footprint model, the predictor (decide/invalidates), the entry
+bar, audits, miss handling, replay and sync were ported from that code and made
+configurable; host-specific parts were removed.

@@ -1,0 +1,13 @@
+{
+  "name": "tracegate-sample-repo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "tracegate-ci": "file:../..",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11"
+  }
+}

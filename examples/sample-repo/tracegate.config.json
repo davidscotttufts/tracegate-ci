@@ -1,0 +1,6 @@
+{
+  "lanes": {
+    "sample": { "dir": ".", "src": "src", "globals": ["test/setup/"] }
+  },
+  "audit": 0.05
+}

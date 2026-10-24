@@ -1,0 +1,4 @@
+node_modules/
+examples/sample-repo/node_modules/
+*.log
+examples/sample-repo/package-lock.json

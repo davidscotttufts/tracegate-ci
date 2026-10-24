@@ -1,0 +1,41 @@
+{
+  "name": "tracegate-ci",
+  "version": "0.1.0",
+  "description": "Test-impact selection for Vitest from observed per-file footprints, with shadow mode, an entry bar, random audits and suspend-on-miss.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "tracegate": "src/cli.mjs"
+  },
+  "exports": {
+    ".": "./src/index.mjs",
+    "./vitest-setup": "./src/vitest-setup.mjs",
+    "./recorder": "./src/recorder.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src/",
+    "LICENSE",
+    "NOTICE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node test/selftest.mjs",
+    "test:sabotage": "node test/sabotage.mjs",
+    "test:e2e": "bash examples/e2e.sh"
+  },
+  "peerDependencies": {
+    "typescript": ">=5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "typescript": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}
