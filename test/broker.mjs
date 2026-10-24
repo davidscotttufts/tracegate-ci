@@ -249,7 +249,7 @@ try {
 
   // The wrapper: env, exit code, nesting.
   const r1 = spawnSync(process.execPath, [CLI, 'lease', '--quiet', '--tokens', '2', '--', process.execPath, '-e',
-    'console.log([process.env.TRACEGATE_TOKENS, process.env.VITEST_MAX_WORKERS, !!process.env.TRACEGATE_LEASE, Number(process.env.TRACEGATE_FENCE) > 0].join(",")); process.exit(7)'], { env, encoding: 'utf8' });
+    'console.log([process.env.TRACEGATE_TOKENS, process.env.VITEST_MAX_WORKERS, !!process.env.TRACEGATE_LEASE, Number(process.env.TRACEGATE_FENCE) > 0].join(",")); process.exit(7)'], { env, encoding: 'utf8', timeout: 15000 });
   check('lease: the command sees TRACEGATE_TOKENS, VITEST_MAX_WORKERS, TRACEGATE_LEASE and a fence', r1.stdout.trim() === '2,2,true,true', r1.stdout + r1.stderr);
   check('lease: the command\'s exit code is forwarded', r1.status === 7, String(r1.status));
   const r2 = spawnSync(process.execPath, [CLI, 'lease', '--quiet', '--class', 'measure', '--exclusive', '--',

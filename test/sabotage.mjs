@@ -8,7 +8,7 @@
 //
 //   node test/sabotage.mjs            all witnesses
 //   node test/sabotage.mjs <id> ...   only these
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -169,6 +169,37 @@ const WITNESSES = [
     'defaults: an 8 GB, 8-core laptop', 'adaptive.mjs'],
 ];
 
+// A broken rule can make a check wait forever, and a test blocked in spawnSync
+// cannot run its own signal handlers. So each witness runs in its own process
+// group, which is SIGKILLed as a whole on timeout, and afterwards every process
+// still naming this witness's temp dir is killed BY PID. That catches brokers the
+// client started detached, outside the group. (MEASURED: removing the
+// liveness rule left a witness, its broker and a lease waiting for 4 h.)
+const TIMEOUT_MS = 300_000;
+function killLeftovers(dir) {
+  let out = '';
+  try { out = execFileSync('ps', ['-A', '-o', 'pid=,command='], { encoding: 'utf8' }); } catch { return; }
+  const real = fs.realpathSync(dir);
+  for (const line of out.split('\n')) {
+    const m = /^\s*(\d+)\s+(.*)$/.exec(line);
+    if (m && Number(m[1]) !== process.pid && (m[2].includes(dir) || m[2].includes(real))) { try { process.kill(Number(m[1]), 'SIGKILL'); } catch { /* gone */ } }
+  }
+}
+function runWitness(dir, script) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [path.join(dir, 'test', script)], { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, TRACEGATE_SELFTEST_VERBOSE: '' } });
+    let stdout = ''; child.stdout.setEncoding('utf8'); child.stdout.on('data', (d) => { stdout += d; }); child.stderr.resume();
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; try { process.kill(-child.pid, 'SIGKILL'); } catch { /* gone */ } }, TIMEOUT_MS);
+    child.on('close', (status) => {
+      clearTimeout(timer);
+      try { process.kill(-child.pid, 'SIGKILL'); } catch { /* the group is already gone */ }
+      killLeftovers(dir);
+      resolve({ status: timedOut ? 124 : status, stdout: timedOut ? `${stdout}\n  ✗ (witness timed out after ${TIMEOUT_MS / 1000} s and was killed)` : stdout });
+    });
+  });
+}
+
 const only = process.argv.slice(2);
 const todo = only.length ? WITNESSES.filter((w) => only.includes(w[0])) : WITNESSES;
 let bad = 0;
@@ -185,7 +216,7 @@ for (const [id, file, from, to, mustFail, script = 'selftest.mjs'] of todo) {
   if (counts.some((n) => n !== 1)) { console.log(`  ✗ ${id}: a mutation anchor occurs ${JSON.stringify(counts)} times in ${file} (expected 1 each) — update the witness`); bad++; fs.rmSync(dir, { recursive: true, force: true }); continue; }
   froms.forEach((x, i) => { text = text.replace(x, () => tos[i]); });
   fs.writeFileSync(f, text);
-  const r = spawnSync(process.execPath, [path.join(dir, 'test', script)], { encoding: 'utf8', timeout: 300_000, env: { ...process.env, TRACEGATE_SELFTEST_VERBOSE: '' } });
+  const r = await runWitness(dir, script);
   const failed = (r.stdout ?? '').split('\n').filter((l) => l.trimStart().startsWith('✗')).map((l) => l.trim().slice(2));
   const hit = failed.some((l) => l.startsWith(mustFail));
   const ok = r.status !== 0 && hit;
