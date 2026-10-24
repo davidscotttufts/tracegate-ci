@@ -18,6 +18,10 @@
 //       the most workers that fit; preemptible work is shed when the budget falls
 //       below what is running; a job held back only by the budgets runs anyway,
 //       flagged `contended`, after starvationS with none of our work running.
+//   I10 observe (Phase 0.5b): an `observe` job is granted at once, whatever the
+//       budgets say, so adopting the broker beside existing coordination changes
+//       nothing; the grant records whether it WOULD have waited, and behind whom.
+//       Its tokens count as used, so the broker's picture of the machine is true.
 
 export const PREEMPT_GAP = 10;
 
@@ -60,7 +64,7 @@ export function apply(st, ev) {
       st.jobs.set(ev.id, {
         id: ev.id, owner: ev.owner ?? null, class: ev.class, label: ev.label ?? '', tokens: ev.tokens ?? 1,
         exclusive: !!ev.exclusive, est: ev.est ?? null, parent: ev.parent ?? null, deadline: ev.deadline ?? null,
-        minTokens: Number.isInteger(ev.minTokens) && ev.minTokens > 0 ? ev.minTokens : null,
+        minTokens: Number.isInteger(ev.minTokens) && ev.minTokens > 0 ? ev.minTokens : null, observe: !!ev.observe, wouldWait: null,
         memPerToken: Number.isFinite(ev.memPerToken) && ev.memPerToken > 0 ? ev.memPerToken : null, reservedMB: 0, contended: false,
         priority: ev.priority ?? cls.priority, preemptible: ev.preemptible ?? cls.preemptible,
         state: 'queued', enqueuedAt: ev.at, enqueueSeq: st.seq, rank: st.seq, grantedAt: null, fence: null,
@@ -72,6 +76,7 @@ export function apply(st, ev) {
       if (!j || j.state !== 'queued') break;
       j.state = 'running'; j.grantedAt = ev.at; j.granted = ev.tokens; j.nested = !!ev.nested;
       j.reservedMB = Number.isFinite(ev.memMB) ? ev.memMB : 0; j.contended = !!ev.contended;
+      if (ev.observed) j.wouldWait = !!ev.wouldWait;
       st.fence = Math.max(st.fence + 1, ev.fence ?? 0); j.fence = st.fence;
       break;
     case 'preempt':
@@ -198,6 +203,13 @@ export function schedule(st, now) {
       const e = estimateOf(st, j);
       return e !== null && Number.isFinite(res.at) && now + e * 1000 <= res.at;
     })();
+    // I10: an observed job never waits; the grant says whether it would have.
+    if (j.observe) {
+      const t = width > 0 ? width : Math.max(1, need);
+      out.grants.push({ id: j.id, tokens: t, nested: false, memMB: t * perTok, observed: true, wouldWait: !(width > 0 && allowedByReservation) });
+      used += t; usedMB += t * perTok; if (j.exclusive) exclusiveRunning = true;
+      continue;
+    }
     if (width > 0 && allowedByReservation) {
       out.grants.push({ id: j.id, tokens: width, nested: false, memMB: width * perTok });
       used += width; usedMB += width * perTok; if (j.exclusive) exclusiveRunning = true;
@@ -281,6 +293,7 @@ export function snapshot(st, now) {
   const view = (j) => ({ id: j.id, class: j.class, label: j.label, priority: j.priority, tokens: j.state === 'running' ? j.granted : j.tokens,
     exclusive: j.exclusive, preemptible: j.preemptible, state: j.state, fence: j.fence, nested: j.nested, parent: j.parent,
     minTokens: j.minTokens, memMB: j.state === 'running' ? j.reservedMB : null, memPerToken: memPerTokenOf(st, j), contended: j.contended,
+    observe: j.observe, wouldWait: j.wouldWait,
     enqueuedAt: j.enqueuedAt, grantedAt: j.grantedAt, est: estimateOf(st, j) });
   const run = runningOf(st);
   return {

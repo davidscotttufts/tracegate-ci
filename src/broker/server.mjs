@@ -89,9 +89,12 @@ export async function serve({ quiet = false } = {}) {
         // endJob tells the holder (`ended`, reason `deadline`).
         for (const id of d.expires) endJob(id, 'expire', 'deadline');
         for (const g of d.grants) {
-          const e = emit({ type: 'grant', id: g.id, tokens: g.tokens, nested: g.nested, ...(g.memMB ? { memMB: g.memMB } : {}), ...(g.contended ? { contended: true } : {}) });
+          // An observed job that would have waited: say behind whom, before the grant changes the picture.
+          const would = g.observed && g.wouldWait ? explain(st, g.id, Date.now()) : null;
+          const e = emit({ type: 'grant', id: g.id, tokens: g.tokens, nested: g.nested, ...(g.memMB ? { memMB: g.memMB } : {}), ...(g.contended ? { contended: true } : {}),
+            ...(g.observed ? { observed: true, wouldWait: !!g.wouldWait, ...(would ? { behind: would.blockers, wouldWhy: would.text } : {}) } : {}) });
           const j = st.jobs.get(g.id);
-          log(`grant ${g.id} ${j.class} ${j.label} tokens=${g.tokens}${g.memMB ? ` mem=${g.memMB}MB` : ''} fence=${j.fence}${g.nested ? ' (nested)' : ''}${g.contended ? ' CONTENDED' : ''}`);
+          log(`grant ${g.id} ${j.class} ${j.label} tokens=${g.tokens}${g.memMB ? ` mem=${g.memMB}MB` : ''} fence=${j.fence}${g.nested ? ' (nested)' : ''}${g.contended ? ' CONTENDED' : ''}${g.observed ? (g.wouldWait ? ' OBSERVED (would have waited)' : ' observed') : ''}`);
           const s = ownerOf.get(g.id);
           if (s) {
             const pid = conns.get(s)?.pid;
@@ -193,6 +196,7 @@ export async function serve({ quiet = false } = {}) {
         emit({ type: 'enqueue', id, owner: c.owner, class: msg.class ?? 'adhoc', label: String(msg.label ?? '').slice(0, 200), tokens,
           ...(Number.isInteger(msg.minTokens) && msg.minTokens > 0 && msg.minTokens < tokens ? { minTokens: msg.minTokens } : {}),
           ...(Number.isFinite(msg.memPerToken) && msg.memPerToken > 0 ? { memPerToken: msg.memPerToken } : {}),
+          ...(msg.observe === true ? { observe: true } : {}),
           exclusive: !!msg.exclusive, est: Number.isFinite(msg.est) && msg.est > 0 ? msg.est : null, parent,
           deadline: Number.isFinite(msg.deadline) ? msg.deadline : null });
         ownerOf.set(id, s); c.jobs.add(id);

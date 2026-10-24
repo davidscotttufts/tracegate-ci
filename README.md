@@ -35,7 +35,11 @@ pressure, swap and heat, and grants each job only the workers and memory the mac
 take right now. Every default derives from the host, so one config serves a laptop and a
 64-core runner. See [Adaptive capacity](#adaptive-capacity).
 
-The model-assisted phases (1–3) are not started. Version 0.3.0, not yet published to npm.
+**Phase 1a is done: the Red Reader.** Every red run leaves a packet that an AI agent
+session in the repository (Claude Code, for example) reads over MCP. The agent records
+an escalate-only opinion that never changes a verdict. See [Red Reader](#red-reader).
+
+Phases 1b–3 are not started. Version 0.4.0, not yet published to npm.
 
 ## The idea in one paragraph
 
@@ -215,6 +219,24 @@ Configure in `tracegate.config.json`:
               "advisor": { "command": "node ./advisor.mjs", "mode": "shadow" } } }
 ```
 
+### Adopting it beside existing locks: observe first
+
+A project that already coordinates CI some other way (lock directories, pause files, a
+queue in a document) can let the broker watch before it decides anything:
+
+```sh
+# One line in an existing script: never waits, never fails its caller, exits with $$.
+tracegate observe --class gate --tokens 7 --label "gate $(git rev-parse --short HEAD)" --watch-pid $$ &
+
+tracegate observed               # would-have-waited grants, behind whom, minutes over budget
+```
+
+The broker grants an observed job at once and records whether it would have waited and
+behind whom. Its tokens count, so the picture of the machine is real. A week of this,
+compared with what the old mechanisms did, is the evidence for retiring them one at a
+time. The broker alone (`src/config.mjs` + `src/broker/`) can be vendored; its entry
+point is `src/broker/main.mjs`.
+
 ### Adaptive capacity
 
 The broker sizes work to the machine as it is now, not as it was configured:
@@ -260,8 +282,8 @@ Details and the per-platform signals: [docs/design/broker.md §9](docs/design/br
 
 `tracegate mcp` is a Model Context Protocol server over stdio.
 
-- **Read-only tools:** `queue_status`, `explain_job`, `history`, `machine_load` and `lane_mode`.
-- **With `--allow-write`:** `cancel_queued` (queued jobs only).
+- **Read-only tools:** `queue_status`, `explain_job`, `history`, `machine_load`, `lane_mode`, `red_runs` and `read_red`.
+- **With `--allow-write`:** `cancel_queued` (queued jobs only) and `annotate_red` (an escalate-only opinion).
 
 Register it with Claude Code:
 
@@ -284,6 +306,28 @@ tier**.
 - A timeout (10 s) or invalid output leaves FIFO order.
 
 The advisor can never grant, preempt, add or remove a job.
+
+## Red Reader
+
+Every red `tracegate run` writes a packet: what failed and why, what Tracegate predicted
+and whether it was a MISS, the re-run-alone result, the file's history, the change and a
+clipped diff, and the machine load. An agent reads it and records an opinion:
+`real`, `flake-suspect`, `infra` or `unclear`, plus `escalate: true|false`.
+
+```sh
+tracegate red list               # packets, escalated first, with the latest opinion
+tracegate red show <id>          # one packet
+tracegate red score              # opinions vs the triage a person later recorded
+cp node_modules/tracegate-ci/agents/red-reader.md .claude/agents/   # a ready subagent
+claude mcp add tracegate -- npx tracegate mcp --allow-write         # read_red, annotate_red
+```
+
+**Escalate-only, by construction:**
+- Opinions are validated against a closed set of fields and stored in their own log.
+- Nothing that selects, reports, ingests or triages reads them.
+- No code path leads from an opinion to `triage`, so a model cannot mark a miss a
+  flake, lift a suspension or turn a red green.
+- `TRACEGATE_RED=off` stops writing packets.
 
 ## How a decision is made
 
@@ -310,7 +354,7 @@ Any change to an unmapped module means "run", so predictions stay safe but get c
 
 ```sh
 npm install                 # typescript, for parsing
-npm test                    # the self-test (77 checks), the broker (50) and adaptive capacity (74)
+npm test                    # the self-test (77 checks), the broker (50), adaptive capacity (74), the Red Reader
 node test/sabotage.mjs      # breaks each rule in a temp copy; each must turn the self-test red
 bash examples/e2e.sh        # end-to-end on examples/sample-repo (needs network for npm install)
 ```

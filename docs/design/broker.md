@@ -192,6 +192,7 @@ is granted the widest width in `[minTokens, need]` that fits.
 |---|---|---|
 | 0.5a | Core scheduler, broker server, `lease`, `queue`, `explain`, MCP read tools, advisor hook (shadow) | Tests for I1–I8, including regression tests that reproduce F1, F2 and F3 and pass; rules sabotage-witnessed |
 | 0.5b | Adopt in the source project: gate, train, daemon, measurements and deploys all wrap in `tracegate lease`; the eight mechanisms retire one by one | Two weeks with no coordination incident |
+| 0.5b-1 | **Observe first (I10, done in v0.4.0):** each existing script starts `tracegate observe --class … --watch-pid $$ &` beside its current locks; the broker grants at once and records what it would have done; `tracegate observed` reports would-have-waited grants, behind whom, and minutes over budget | A week of observe data compared with what the eight mechanisms did; then retire one mechanism at a time, with the owner's decision |
 | 0.6 | Adaptive capacity (§9): cpu and memory budgets from live machine samples, elastic grants, learned memory per job, shedding of preemptible work, a starvation guard; hardware-relative defaults | Tests for I9 and the parsers on fixtures from two page sizes; rules sabotage-witnessed (done, v0.3.0) |
 | 0.5c | A make-compatible jobserver FIFO exported per lease, for Ninja, Cargo and GCC children | Measured under a mixed workload |
 | 2 | Conductor (ROADMAP Phase 2) as an advisor: fail-first and risk-aware composition | Shadow-scored |

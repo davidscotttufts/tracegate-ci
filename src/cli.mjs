@@ -19,6 +19,11 @@ const USAGE = `usage: tracegate <command> [options]
   triage  --lane <l> --file <path> --verdict flake|hole [--head <sha12>]
   replay  --lane <l> --head <commit> --at <iso> [--drop <regex>] [--ignore-lock] [--node <v>] [--out <json>]
   full-done --lane <l>                 record a complete, green whole-lane run
+  red     list | show <id> | write --lane <l> --run <dir> [--base ref] | score
+          | annotate <id> --verdict real|flake-suspect|infra|unclear --escalate true|false
+                     --confidence 0..1 --reasons "…"
+                                       Red Reader: packets for red runs, and escalate-only
+                                       opinions on them (an agent writes these over MCP)
   status                               ledger, entry bar and mode per lane
   sync    [--remote <[user@]host:/abs/ledger>]
 
@@ -27,6 +32,12 @@ Broker (one queue for the machine's CI work; see docs/design/broker.md):
           [--est seconds] [--label l] [--deadline-min m] [--requeue] [--quiet] -- <command…>
                                        run a command when the broker grants capacity;
                                        --min-tokens makes it elastic (granted m..n workers)
+  observe --class c [--tokens n] [--label l] [--exclusive] --watch-pid P [--quiet]
+                                       register work coordinated elsewhere, never waiting;
+                                       the broker records whether it WOULD have waited
+                                       (adopt the broker beside existing locks, then compare)
+  observed [--json] [--hours h]        what observe recorded: would-have-waited grants,
+                                       behind whom, and time over capacity
   machine [--json]                     this host's hardware, the latest load/memory sample,
                                        and the cpu/memory budgets the broker hands out now
   queue   [--json]                     running leases, the queue and the reservation
@@ -86,8 +97,11 @@ try {
   else if (cmd === 'triage') triage(o);
   else if (cmd === 'full-done') fullDone(o);
   else if (cmd === 'replay') replay(o);
+  else if (cmd === 'red') { const id = process.argv[4] && !process.argv[4].startsWith('--') ? process.argv[4] : undefined; (await import('./red.mjs')).red(process.argv[3], { ...o, _id: id }); }
   else if (cmd === 'run') process.exitCode = runLane(o, rest);
   else if (cmd === 'lease') process.exitCode = await (await import('./broker/client.mjs')).lease(o, rest);
+  else if (cmd === 'observe') process.exitCode = await (await import('./broker/client.mjs')).observe(o);
+  else if (cmd === 'observed') (await import('./broker/observed.mjs')).observed(o);
   else if (cmd === 'machine') printMachine(await (await import('./broker/client.mjs')).call({ op: 'machine' }), o.json);
   else if (cmd === 'queue') printQueue(await (await import('./broker/client.mjs')).call({ op: 'status' }), o.json);
   else if (cmd === 'explain') {

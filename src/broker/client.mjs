@@ -8,7 +8,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { brokerDir, socketPath } from './paths.mjs';
 
-const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'cli.mjs');
+// The broker-only entry: autostart loads nothing but the broker (see main.mjs).
+const MAIN = path.join(path.dirname(fileURLToPath(import.meta.url)), 'main.mjs');
 export const EX_TEMPFAIL = 75; // preempted: try again later
 
 /** Connect, starting a broker in the background if none answers. */
@@ -25,7 +26,7 @@ export async function connect({ autostart = true, timeoutMs = 8000 } = {}) {
   const dir = brokerDir();
   fs.mkdirSync(dir, { recursive: true });
   const out = fs.openSync(path.join(dir, 'broker.log'), 'a');
-  const child = spawn(process.execPath, [CLI, 'broker', 'serve'], { detached: true, stdio: ['ignore', out, out], env: process.env });
+  const child = spawn(process.execPath, [MAIN, 'serve'], { detached: true, stdio: ['ignore', out, out], env: process.env });
   child.unref();
   const until = Date.now() + timeoutMs;
   for (;;) {
@@ -153,4 +154,37 @@ export async function lease(o, argv) {
     if (rc === EX_TEMPFAIL && o.requeue) { say('requeueing'); continue; }
     return rc;
   }
+}
+
+/**
+ * `tracegate observe --class c [--tokens n] [--label l] --watch-pid P [--quiet]`
+ * Phase 0.5b (I10): register work that is coordinated by something else, without
+ * waiting. The broker grants it at once and records whether it WOULD have waited,
+ * and behind whom; its tokens count, and P's process tree is measured. The holder
+ * stays connected until P exits, then exits itself. Meant to be started in the
+ * background by an existing script: `tracegate observe … --watch-pid $$ &`.
+ * It never blocks, never fails its caller, and ignores preemption (it logs it).
+ */
+export async function observe(o) {
+  const pid = Number(o['watch-pid']);
+  if (!(Number.isInteger(pid) && pid > 1)) throw new Error('observe: --watch-pid <pid> is required');
+  const alive = () => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+  const quiet = !!o.quiet;
+  const say = (m) => { if (!quiet) process.stderr.write(`tracegate observe: ${m}\n`); };
+  let c;
+  try { c = await connect(); } catch (e) { say(`no broker (${e.message}); nothing recorded`); return 0; }
+  c.send({ op: 'hello', owner: `observe:${pid}`, pid });
+  c.on((m) => {
+    if (m.type === 'granted') say(`${m.id} registered with ${m.tokens} token(s)${m.memMB ? `, ${m.memMB} MB` : ''}`);
+    else if (m.type === 'preempt') say(`${m.id}: the broker would have preempted this for ${m.by} (observe: not acted on)`);
+    else if (m.type === 'error') say(`broker refused: ${m.error}`);
+  });
+  c.send({ op: 'request', observe: true, class: o.class && o.class !== true ? o.class : 'adhoc', tokens: o.tokens !== undefined ? Number(o.tokens) : 1,
+    exclusive: !!o.exclusive, label: o.label && o.label !== true ? o.label : `pid ${pid}` });
+  await new Promise((resolve) => {
+    const t = setInterval(() => { if (!alive()) { clearInterval(t); resolve(); } }, 2000);
+    c.closed.then(() => { clearInterval(t); resolve(); });
+  });
+  c.close();
+  return 0;
 }

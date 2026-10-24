@@ -1,8 +1,9 @@
 // `tracegate mcp [--allow-write]` — a Model Context Protocol server over stdio.
 //
 // Agents coordinate through the broker instead of messaging each other. Read
-// tools are always on. The only write tool, `cancel_queued`, needs --allow-write
-// and can only cancel a QUEUED job, never a running one. Work itself is done with
+// tools are always on. The write tools need --allow-write: `cancel_queued` can only
+// cancel a QUEUED job, never a running one, and `annotate_red` only records an
+// escalate-only opinion that nothing in Tracegate reads back. Work itself is done with
 // `tracegate lease -- …` in the agent's own shell, so a lease stays bound to the
 // process that does the work (its liveness is that process's connection).
 //
@@ -10,7 +11,7 @@
 import { call } from './broker/client.mjs';
 
 const SUPPORTED = ['2025-06-18', '2025-03-26', '2024-11-05'];
-const pkg = { name: 'tracegate', version: '0.3.0' };
+const pkg = { name: 'tracegate', version: '0.4.0' };
 
 const READ_TOOLS = [
   {
@@ -42,6 +43,20 @@ const READ_TOOLS = [
     run: async () => { const m = await call({ op: 'machine' }); delete m.ref; delete m.type; return m; },
   },
   {
+    name: 'red_runs',
+    description: 'Recent red runs on this machine (newest first; ones an opinion escalated first), each with its packet id, lane, head, how many files failed, how many were Tracegate MISSES, and the latest opinion if any. Read a packet with read_red.',
+    inputSchema: { type: 'object', properties: { n: { type: 'integer', minimum: 1, maximum: 200, default: 20 } }, additionalProperties: false },
+    annotations: { readOnlyHint: true },
+    run: async ({ n }) => (await import('./red.mjs')).listRed(n ?? 20),
+  },
+  {
+    name: 'read_red',
+    description: 'One red-run packet: every failing file with its failure text, what Tracegate predicted for it and why, whether it was a MISS and how its re-run alone went, its past misses and triage, the files changed against the base, a clipped diff, and the machine load. Use it to form an opinion; read the code in the repository as well before you give one.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false },
+    annotations: { readOnlyHint: true },
+    run: async ({ id }) => (await import('./red.mjs')).readPacket(id),
+  },
+  {
     name: 'lane_mode',
     description: 'Tracegate\'s test-selection mode per lane (off, shadow or enforce) and why, from the repository\'s tracegate.config.json.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
@@ -55,6 +70,17 @@ const READ_TOOLS = [
 ];
 
 const WRITE_TOOLS = [
+  {
+    name: 'annotate_red',
+    description: 'Record an ESCALATE-ONLY opinion on a red-run packet. It is stored and shown to people; it never changes a verdict, never triages a miss, never merges or re-runs anything. verdict: real (the change broke it), flake-suspect (fails on its own; say why), infra (machine, network, contention), unclear. Set escalate=true when a person should look now (for example a MISS you believe is a real footprint hole, or a red you believe is real but was waved through). Give reasons that cite files and lines.',
+    inputSchema: { type: 'object', properties: {
+      id: { type: 'string' }, verdict: { type: 'string', enum: ['real', 'flake-suspect', 'infra', 'unclear'] }, escalate: { type: 'boolean' },
+      confidence: { type: 'number', minimum: 0, maximum: 1 }, reasons: { type: 'string', minLength: 1, maxLength: 4000 },
+      files: { type: 'array', items: { type: 'string' }, maxItems: 200 }, owner: { type: 'string', maxLength: 200 },
+    }, required: ['id', 'verdict', 'escalate', 'confidence', 'reasons'], additionalProperties: false },
+    annotations: { readOnlyHint: false, destructiveHint: false },
+    run: async (a) => (await import('./red.mjs')).annotate({ ...a, by: a.by ?? 'mcp' }),
+  },
   {
     name: 'cancel_queued',
     description: 'Cancel a job that is still QUEUED (never a running one). The job\'s own wrapper then exits.',

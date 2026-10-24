@@ -15,6 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { apply, explain, initialState, PREEMPT_GAP, schedule } from '../src/broker/core.mjs';
+import { summarize } from '../src/broker/observed.mjs';
 
 const PKG = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = path.join(PKG, 'src', 'cli.mjs');
@@ -36,7 +37,7 @@ function sim(capacity) {
       out.reservation = d.reservation;
       if (!d.grants.length && !d.preempts.length && !d.expires.length) break;
       for (const id of d.expires) { ev({ type: 'expire', id, reason: 'deadline' }); out.expires.push(id); }
-      for (const g of d.grants) { ev({ type: 'grant', id: g.id, tokens: g.tokens, nested: g.nested }); out.grants.push(g.id); }
+      for (const g of d.grants) { ev({ type: 'grant', ...g }); out.grants.push(g.id); }
       for (const p of d.preempts) { ev({ type: 'preempt', id: p.id, by: p.by }); out.preempts.push(p.id); }
     }
     return out;
@@ -204,6 +205,38 @@ function sim(capacity) {
   check('explain names the position, the holder of the capacity and the reservation', e.position === 1 && /gate main/.test(JSON.stringify(e.blockers)) && /reserved to start/.test(e.text), e.text);
 }
 
+// I10 — observe: adopt the broker beside other coordination without changing it
+{
+  const s = sim(2);
+  const gate = s.add({ class: 'gate', tokens: 2, est: 600 }); s.step();
+  const obs = s.add({ class: 'gate', tokens: 2, observe: true, label: 'observed gate' }); s.step();
+  check('I10: an observed job is granted at once, even with no room', s.state(obs) === 'running');
+  check('I10: ...and records that it WOULD have waited', s.st.jobs.get(obs).wouldWait === true && s.log.some((e) => e.type === 'grant' && e.id === obs && e.observed && e.wouldWait));
+  const later = s.add({ class: 'adhoc', tokens: 1 }); s.step();
+  check('I10: its tokens count, so ordinary work still sees the real load', s.state(later) === 'queued');
+  s.end(gate); s.end(obs); s.step();
+  const free = s.add({ class: 'gate', tokens: 1, observe: true });
+  s.end(later); s.step();
+  check('I10: with room, an observed job records that it would NOT have waited', s.st.jobs.get(free).wouldWait === false);
+}
+{
+  const s = sim(4);
+  const d = s.add({ class: 'daemon', tokens: 4 }); s.step();
+  const m = s.add({ class: 'measure', exclusive: true, observe: true }); const out = s.step();
+  check('I10: an observed job never preempts anything', !out.preempts.length && s.state(d) === 'running' && s.state(m) === 'running', JSON.stringify(out));
+}
+{
+  const t0 = 1_000_000;
+  const ev = [
+    { type: 'enqueue', id: 'j1', class: 'gate', label: 'a', at: t0 }, { type: 'grant', id: 'j1', tokens: 2, at: t0 },
+    { type: 'enqueue', id: 'j2', class: 'train', label: 'b', observe: true, at: t0 + 60_000 },
+    { type: 'grant', id: 'j2', tokens: 2, observed: true, wouldWait: true, behind: [{ class: 'gate', label: 'a' }], at: t0 + 60_000 },
+    { type: 'release', id: 'j2', at: t0 + 180_000 }, { type: 'release', id: 'j1', at: t0 + 240_000 },
+  ];
+  const r = summarize(ev, { capacity: 2, now: t0 + 300_000 });
+  check('observed report: would-have-waited grants, behind whom, and minutes over the budget', r.observed === 1 && r.wouldWait === 1 && r.waits[0].behind[0] === 'gate a' && r.overCapacityMinutes === 2 && r.peakTokens === 4, JSON.stringify(r));
+}
+
 // ── Part 2: a live broker ─────────────────────────────────────────────────────
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-broker-test-'));
 const env = { ...process.env, TRACEGATE_BROKER_DIR: path.join(tmp, 'broker'), TRACEGATE_BROKER_SOCKET: path.join(tmp, 's.sock'), TRACEGATE_BROKER_CAPACITY: '2', TRACEGATE_BROKER_ADAPTIVE: 'off' };
@@ -290,6 +323,22 @@ try {
   check('MCP: queue_status returns the broker\'s capacity', JSON.parse(by(3)?.result?.content?.[0]?.text ?? '{}').capacity === 2, JSON.stringify(by(3)));
   check('MCP: an unlisted write tool is refused', !!by(4)?.error, JSON.stringify(by(4)));
   mcp.stdin.end();
+
+  // observe, live: never blocks, and ends with the process it watches.
+  {
+    const hog2 = await raw(); hog2.send({ op: 'request', class: 'gate', tokens: 2, label: 'holder' }); await hog2.wait((x) => x.type === 'granted');
+    const target = spawn(process.execPath, ['-e', 'setTimeout(()=>{}, 2500)']);
+    const t0 = Date.now();
+    const ob = spawn(process.execPath, [CLI, 'observe', '--quiet', '--class', 'train', '--tokens', '2', '--label', 'observed train', '--watch-pid', String(target.pid)], { env, stdio: 'ignore' });
+    started.add(ob);
+    const obCode = await Promise.race([new Promise((r) => ob.on('exit', r)), sleep(12000).then(() => 'timeout')]);
+    const evs = fs.readFileSync(path.join(env.TRACEGATE_BROKER_DIR, 'events.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    const g = evs.filter((e) => e.type === 'grant' && e.observed).pop();
+    check('observe live: granted at once while the machine is full, logged as would-have-waited behind the holder', !!g && g.wouldWait === true && JSON.stringify(g.behind ?? []).includes('holder'), JSON.stringify(g));
+    check('observe live: exits 0 soon after the watched process ends', obCode === 0 && Date.now() - t0 < 9000, `${obCode} after ${Date.now() - t0} ms`);
+    check('observe live: its lease is released when it exits', evs.some((e) => e.type === 'release' && e.id === g?.id) || (await sleep(300), fs.readFileSync(path.join(env.TRACEGATE_BROKER_DIR, 'events.jsonl'), 'utf8').includes(`"id":"${g?.id}","reason":"holder-exited"`)));
+    hog2.s.destroy(); await sleep(150);
+  }
 
   // The log is the record
   const events = fs.readFileSync(path.join(env.TRACEGATE_BROKER_DIR, 'events.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));

@@ -16,6 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { ctx, lane } from './config.mjs';
 import { effectiveMode, fullDone, head, ingest, loadResults, report, select, triage } from './predictor.mjs';
+import { writePacket } from './red.mjs';
 
 function vitestBin(laneAbs) {
   return path.join(path.dirname(createRequire(path.join(laneAbs, 'package.json')).resolve('vitest/package.json')), 'vitest.mjs');
@@ -63,15 +64,23 @@ export function runLane(o, userArgs) {
   // A footprint hole is a deterministic function of the tree, so it fails again
   // alone and stays a MISS. One that passes alone is triaged a flake. The run
   // stays red either way: the file did fail here.
+  const rechecks = {};
   for (const m of rep?.misses ?? []) {
     console.log(`tracegate (${ln.name}): re-running the MISS ${m} alone at ${rep.head.slice(0, 12)} …`);
     const again = vitest(ln, [path.join(c.root, m)], { TRACEGATE_RECORD: '' });
+    rechecks[m] = again === 0 ? 'passed' : 'failed';
     if (again === 0) {
       triage({ lane: ln.name, file: m, head: rep.head.slice(0, 12), verdict: 'flake' });
       console.log(`tracegate (${ln.name}): ${m} PASSED alone, so it is recorded as a flake and does not suspend the lane. Read its failure before believing that: a wrong argument whose assertion depends on timing can pass alone too. The run is still red.`);
     } else {
       console.log(`\x1b[31mtracegate (${ln.name}): ${m} FAILS alone at this tree too — a real MISS (a footprint hole). The lane stays suspended.\x1b[0m`);
     }
+  }
+  // Red Reader (Phase 1): a red run leaves a packet for an agent to read. It
+  // only records; nothing reads opinions back. TRACEGATE_RED=off skips it.
+  if (rc !== 0 && process.env.TRACEGATE_RED !== 'off') {
+    try { const p = writePacket({ lane: ln.name, run, base: o.base, rechecks }); console.log(`tracegate (${ln.name}): red packet ${p.id} — an agent can read it with \`tracegate red show ${p.id}\` or the MCP tool read_red.`); }
+    catch (e) { console.log(`tracegate (${ln.name}): could not write the red packet (${e.message}); the run is red either way.`); }
   }
   ingest({ lane: ln.name, run, 'expect-head': headAtStart });
   // A complete full run: the whole lane ran (shadow) and every listed file passed.

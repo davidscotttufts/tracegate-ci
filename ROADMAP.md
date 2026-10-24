@@ -191,6 +191,14 @@ The full analysis is in [docs/design/broker.md](docs/design/broker.md).
 **Next (0.5b):** adopt it in the host project and retire the eight mechanisms one by one.
 Exit: two weeks with no coordination incident.
 
+### Phase 0.5b-1 — Observe mode: adopt the broker beside existing coordination (done, v0.4.0)
+
+`tracegate observe --class … --watch-pid $$ &` registers work that something else
+coordinates. The broker grants it at once (I10), records whether it would have waited
+and behind whom, counts its tokens and measures its memory. `tracegate observed`
+reports it. The host project starts here: one line per script, no behaviour change.
+Retiring each of its eight mechanisms then becomes a decision taken on a week of data.
+
 ### Phase 0.6 — Adaptive capacity: size work to the machine as it is now (done, v0.3.0)
 
 **Why.** A fixed token count cannot see work the broker does not run: another
@@ -244,6 +252,33 @@ Design: [docs/design/broker.md §9](docs/design/broker.md#9-adaptive-capacity-ph
 
 **Exit:** four weeks of shadow rows, scored against the owners' final triage, then an
 enforce/no-enforce decision.
+
+> **CORRECTION (2026-10-24): where the model runs, and what shipped first (1a).** The
+> plan above assumed CI would call a model. The decision instead is that the reader is
+> an **AI agent session that already works in the repository** (Claude Code, for
+> example), so failure text and diffs never go to a new provider. What shipped
+> (v0.4.0) is the plumbing and the guardrails, with no effect on any verdict:
+> - **Packets.** `tracegate run` writes one per red run (`red/<id>.json`): each
+>   failing file's text (colour stripped, clipped), its prediction and reason, MISS
+>   status and the re-run-alone result, its miss and triage history, the change
+>   against the base with a clipped diff, the machine load, and the contended flag.
+> - **MCP tools.** The read tools are `red_runs` and `read_red`. `annotate_red`
+>   (write) needs `--allow-write`.
+> - **Closed-world opinions.** An opinion has a verdict enum, a boolean `escalate`,
+>   a confidence from 0 to 1, bounded reasons, and only files that failed. Unknown
+>   fields are refused, so there is no smuggled "triage".
+> - **Escalate-only, structurally.** No code path leads from an opinion to `triage`.
+>   The predictor does not import the reader; a test asserts that, and that a
+>   "flake" opinion writes no triage row. That also covers the planned prompt-injection
+>   test: an opinion cannot lower anything, whatever the text says.
+> - **`agents/red-reader.md`** is a ready subagent with the procedure: read the code,
+>   not only the failure text; "passed alone" is not a flake by itself; escalate a
+>   MISS that looks like a real hole.
+> - **`tracegate red score`** compares opinions with the triage a person later recorded.
+>
+> **1b (not done, needs the owner's decision with `red score` data):** let an
+> escalated `real` opinion on a MISS raise the deterministic `flake` to `hole` (the
+> stricter verdict wins), as planned above.
 
 ### Phase 2 — Conductor: fail-first ordering and risk-aware train composition
 
