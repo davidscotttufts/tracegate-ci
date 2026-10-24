@@ -23,7 +23,10 @@ function vitestBin(laneAbs) {
 
 function vitest(ln, args, env) {
   const laneAbs = path.join(ctx().root, ln.dir);
-  const r = spawnSync(process.execPath, [vitestBin(laneAbs), 'run', ...args], { cwd: laneAbs, stdio: 'inherit', env: { ...process.env, ...env } });
+  // Under a broker lease (`tracegate lease -- tracegate run …`), size vitest to the grant.
+  const tokens = Number(process.env.TRACEGATE_TOKENS);
+  const workers = Number.isInteger(tokens) && tokens > 0 && !args.some((a) => a.startsWith('--maxWorkers')) ? [`--maxWorkers=${tokens}`] : [];
+  const r = spawnSync(process.execPath, [vitestBin(laneAbs), 'run', ...workers, ...args], { cwd: laneAbs, stdio: 'inherit', env: { ...process.env, ...env } });
   return r.status ?? 1;
 }
 

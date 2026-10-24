@@ -22,6 +22,16 @@ const USAGE = `usage: tracegate <command> [options]
   status                               ledger, entry bar and mode per lane
   sync    [--remote <[user@]host:/abs/ledger>]
 
+Broker (one queue for the machine's CI work; see docs/design/broker.md):
+  lease   [--class c] [--tokens n] [--exclusive] [--est seconds] [--label l]
+          [--deadline-min m] [--requeue] [--quiet] -- <command…>
+                                       run a command when the broker grants capacity
+  queue   [--json]                     running leases, the queue and the reservation
+  explain <job id>                     why a job waits, and when it is reserved to start
+  history [--n 50]                     recent broker events
+  broker  serve | stop                 run the broker in the foreground / stop it
+  mcp     [--allow-write]              Model Context Protocol server (stdio) for agents
+
 --lane may be omitted when the config has exactly one lane.`;
 
 function parse(argv) {
@@ -38,6 +48,15 @@ function parse(argv) {
   return { o, rest };
 }
 
+function printQueue(s, json) {
+  if (json) { delete s.ref; delete s.type; console.log(JSON.stringify(s, null, 2)); return; }
+  const row = (j) => `  ${j.id.padEnd(6)} ${j.class.padEnd(8)} ${String(j.tokens).padStart(3)}${j.exclusive ? ' excl' : '     '}  ${j.label}`;
+  console.log(`capacity ${s.capacity}, in use ${s.used} (broker pid ${s.pid})`);
+  console.log(`running (${s.running.length}):`); for (const j of s.running) console.log(`${row(j)}  fence ${j.fence}${j.nested ? ` in ${j.parent}` : ''}`);
+  console.log(`queued (${s.queued.length}):`); for (const j of s.queued) console.log(row(j));
+  if (s.reservation) console.log(`reservation: ${s.reservation.id} starts ${s.reservation.at ?? 'when a job without an estimate ends'}`);
+}
+
 const cmd = process.argv[2];
 const { o, rest } = parse(process.argv.slice(3));
 try {
@@ -51,6 +70,20 @@ try {
   else if (cmd === 'full-done') fullDone(o);
   else if (cmd === 'replay') replay(o);
   else if (cmd === 'run') process.exitCode = runLane(o, rest);
+  else if (cmd === 'lease') process.exitCode = await (await import('./broker/client.mjs')).lease(o, rest);
+  else if (cmd === 'queue') printQueue(await (await import('./broker/client.mjs')).call({ op: 'status' }), o.json);
+  else if (cmd === 'explain') {
+    const id = process.argv[3];
+    if (!id || id.startsWith('--')) throw new Error('explain: give a job id, e.g. `tracegate explain j42`');
+    console.log((await (await import('./broker/client.mjs')).call({ op: 'explain', id })).text);
+  } else if (cmd === 'history') {
+    for (const e of (await (await import('./broker/client.mjs')).call({ op: 'history', n: Number(o.n ?? 50) })).events) console.log(JSON.stringify(e));
+  } else if (cmd === 'broker' && process.argv[3] === 'serve') await (await import('./broker/server.mjs')).serve();
+  else if (cmd === 'broker' && process.argv[3] === 'stop') {
+    const s = await (await import('./broker/client.mjs')).call({ op: 'status' }, { autostart: false }).catch(() => null);
+    if (!s) console.log('tracegate broker: not running');
+    else { process.kill(s.pid, 'SIGTERM'); console.log(`tracegate broker: stopped pid ${s.pid}`); }
+  } else if (cmd === 'mcp') await (await import('./mcp.mjs')).mcp(o);
   else { console.error(USAGE); process.exit(cmd === undefined || cmd === 'help' || cmd === '--help' ? 0 : 2); }
 } catch (e) {
   console.error(`tracegate ${cmd}: ${e.message}`);

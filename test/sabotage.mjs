@@ -96,12 +96,40 @@ const WITNESSES = [
   ['ingest-budget', 'src/predictor.mjs',
     'if (Date.now() - t0 > budgetMs) { overBudget++; continue; }', '',
     'ingest past its time budget records nothing (no partial footprint)'],
+  // Broker rules (test/broker.mjs; the optional 6th field names the test script).
+  ['broker-nested-grant', 'src/broker/core.mjs',
+    "if (parent && parent.state === 'running') {", 'if (false) {',
+    'F2: a request from inside a running lease is granted at once (no self-deadlock)', 'broker.mjs'],
+  ['broker-preempt-only-preemptible', 'src/broker/core.mjs',
+    '.filter((r) => r.preemptible && r.priority <= j.priority - PREEMPT_GAP)', '.filter((r) => r.priority <= j.priority - PREEMPT_GAP)',
+    'I6: a running gate is never preempted, even for a deploy', 'broker.mjs'],
+  ['broker-preempt-gap', 'src/broker/core.mjs',
+    '.filter((r) => r.preemptible && r.priority <= j.priority - PREEMPT_GAP)', '.filter((r) => r.preemptible && r.priority < j.priority)',
+    'I6: no preemption across a priority gap below', 'broker.mjs'],
+  ['broker-easy-backfill', 'src/broker/core.mjs',
+    'const allowedByReservation = !res || j.preemptible ||', 'const allowedByReservation = true ||',
+    'F3: a later gate that would overrun the reservation does not jump ahead', 'broker.mjs'],
+  ['broker-fence-increases', 'src/broker/core.mjs',
+    'st.fence = Math.max(st.fence + 1, ev.fence ?? 0);', 'st.fence = ev.fence ?? 1;',
+    'I7: fence tokens strictly increase across grants', 'broker.mjs'],
+  ['broker-liveness-is-the-connection', 'src/broker/server.mjs',
+    "s.on('close', gone); s.on('error', gone);", '',
+    'I3: SIGKILL of the holder frees its lease', 'broker.mjs'],
+  ['broker-advisor-permutation-only', 'src/broker/server.mjs',
+    "const valid = order && order.length === ids.size && new Set(order).size === ids.size && order.every((id) => ids.has(id));", 'const valid = !!order;',
+    'advisor: an answer that adds a job is rejected and logged', 'broker.mjs'],
+  ['broker-advisor-shadow', 'src/broker/server.mjs',
+    "const applied = a.mode === 'enforce';", 'const applied = true;',
+    'advisor (shadow): ...and not applied', 'broker.mjs'],
+  ['broker-deadline', 'src/broker/core.mjs',
+    'if (j.deadline !== null && now >= j.deadline) { out.expires.push(j.id); continue; }', '',
+    'a queued job past its deadline expires with a logged event', 'broker.mjs'],
 ];
 
 const only = process.argv.slice(2);
 const todo = only.length ? WITNESSES.filter((w) => only.includes(w[0])) : WITNESSES;
 let bad = 0;
-for (const [id, file, from, to, mustFail] of todo) {
+for (const [id, file, from, to, mustFail, script = 'selftest.mjs'] of todo) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `tracegate-sabotage-${id}-`));
   fs.cpSync(path.join(PKG, 'src'), path.join(dir, 'src'), { recursive: true });
   fs.cpSync(path.join(PKG, 'test'), path.join(dir, 'test'), { recursive: true });
@@ -114,7 +142,7 @@ for (const [id, file, from, to, mustFail] of todo) {
   if (counts.some((n) => n !== 1)) { console.log(`  ✗ ${id}: a mutation anchor occurs ${JSON.stringify(counts)} times in ${file} (expected 1 each) — update the witness`); bad++; fs.rmSync(dir, { recursive: true, force: true }); continue; }
   froms.forEach((x, i) => { text = text.replace(x, () => tos[i]); });
   fs.writeFileSync(f, text);
-  const r = spawnSync(process.execPath, [path.join(dir, 'test', 'selftest.mjs')], { encoding: 'utf8', env: { ...process.env, TRACEGATE_SELFTEST_VERBOSE: '' } });
+  const r = spawnSync(process.execPath, [path.join(dir, 'test', script)], { encoding: 'utf8', timeout: 300_000, env: { ...process.env, TRACEGATE_SELFTEST_VERBOSE: '' } });
   const failed = (r.stdout ?? '').split('\n').filter((l) => l.trimStart().startsWith('✗')).map((l) => l.trim().slice(2));
   const hit = failed.some((l) => l.startsWith(mustFail));
   const ok = r.status !== 0 && hit;

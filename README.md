@@ -23,8 +23,14 @@ Tracegate was built and runs in production inside a private TypeScript monorepo 
 pull requests into merge trains and bisects a red train automatically.
 
 **Phase 0 is done ([ROADMAP.md](ROADMAP.md) §4):** the deterministic core is extracted
-here as a standalone tool for **Vitest + TypeScript**. The model-assisted phases are not
-started. Version 0.1.0, not yet published to npm.
+here as a standalone tool for **Vitest + TypeScript**.
+
+**Phase 0.5 is done: the broker.** One queue for all of a machine's CI work: gates,
+merge trains, background pre-gating, measurements, deploy builds, and every AI agent
+session's test runs. Agents reach it over MCP. See [Broker](#broker) and
+[docs/design/broker.md](docs/design/broker.md).
+
+The model-assisted phases (1–3) are not started. Version 0.2.0, not yet published to npm.
 
 ## The idea in one paragraph
 
@@ -158,6 +164,79 @@ npx tracegate sync --remote user@host:/abs/path/.git/tracegate
 `fp/` and `blobs/` are a cache (deleting them is always safe and only costs predictions);
 `shadow-*.tsv`, `misses-*.tsv`, `triage-*.tsv`, `reasons-*.tsv`, `full-*.tsv` are
 append-only evidence, one file per host. **Never delete the logs**: the entry bar reads them.
+
+## Broker
+
+When several things share one machine (gates, a background daemon, measurements, deploy
+builds, and AI coding agents each running tests), let one process hand out capacity:
+
+```sh
+# A gate: 4 of the machine's tokens, about 15 minutes.
+tracegate lease --class gate --tokens 4 --est 900 --label "gate api" -- npm run ci
+
+# A measurement that needs the machine to itself. It reserves the next window and
+# starts by itself; nobody has to say "go".
+tracegate lease --class measure --exclusive -- ./bench.sh
+
+# Background work that yields when anything important needs the room (exits 75).
+tracegate lease --class daemon --tokens 2 --requeue -- tracegate run --lane api
+
+tracegate queue          # who holds what, who waits, and the reservation
+tracegate explain j42    # why j42 waits, and when it is reserved to start
+```
+
+- **The first `lease` starts the broker** in the background. It stops after 30 idle
+  minutes.
+- **What the command gets:** `TRACEGATE_TOKENS` and `VITEST_MAX_WORKERS`, set to its
+  grant. `tracegate run` sizes Vitest to the grant.
+- **Nested leases run inside their parent.** A lease taken inside another lease runs at
+  once within the parent's tokens, so a job can never queue behind itself.
+- **Liveness is the connection.** A lease ends when its holder's process ends, SIGKILL
+  included, so there are no stale locks to clean up.
+
+| Class | Priority | Preemptible |
+|---|---|---|
+| `deploy` | 70 | no |
+| `gate`, `train`, `measure` | 50 | no |
+| `adhoc` | 30 | no |
+| `daemon` | 10 | yes |
+
+Configure in `tracegate.config.json`:
+
+```json
+{ "broker": { "capacity": 8, "idleMinutes": 30,
+              "classes": { "adhoc": { "priority": 35 } },
+              "advisor": { "command": "node ./advisor.mjs", "mode": "shadow" } } }
+```
+
+### For AI agents (MCP)
+
+`tracegate mcp` is a Model Context Protocol server over stdio.
+
+- **Read-only tools:** `queue_status`, `explain_job`, `history` and `lane_mode`.
+- **With `--allow-write`:** `cancel_queued` (queued jobs only).
+
+Register it with Claude Code:
+
+```sh
+claude mcp add tracegate -- npx tracegate mcp
+```
+
+An agent checks `queue_status` before heavy work, and runs the work with
+`tracegate lease … -- <command>` in its shell.
+
+### Advisor hook (models in the loop, behind guardrails)
+
+`broker.advisor.command` receives `{tier, jobs: [{id, class, label, est}]}` on stdin. It
+may answer `{order: [ids…], reasons}` to reorder jobs that wait in **the same priority
+tier**.
+
+- Anything that is not an exact permutation of that tier is rejected and logged.
+- Answers are stored by input hash.
+- **The default mode is `shadow`:** the advice is logged as an event and not applied.
+- A timeout (10 s) or invalid output leaves FIFO order.
+
+The advisor can never grant, preempt, add or remove a job.
 
 ## How a decision is made
 

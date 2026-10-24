@@ -135,6 +135,7 @@ export function ctx() {
     ingestBudgetSeconds: num('TRACEGATE_INGEST_BUDGET_S', 'ingestBudgetSeconds'),
     host: (process.env.TRACEGATE_HOST || os.hostname().split('.')[0] || 'host').replace(/[^A-Za-z0-9_-]/g, '_'),
     sync: cfg.sync ?? null,
+    broker: cfg.broker ?? null, // the broker reads it (src/broker/paths.mjs)
   };
   return _ctx;
 }

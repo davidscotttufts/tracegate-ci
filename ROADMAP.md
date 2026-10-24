@@ -1,6 +1,6 @@
 # Tracegate CI — Roadmap
 
-Last updated: 2026-10-24.
+Last updated: 2026-10-24 (Phase 0 and Phase 0.5 done).
 
 This document records:
 1. what the industry has done to make CI faster without making it less trustworthy;
@@ -142,6 +142,55 @@ Make the deterministic system a standalone tool.
 **Exit:** the tool runs on a sample TypeScript repo with the same self-test results as the
 host project.
 
+**Done 2026-10-24 (v0.1.0):** self-test 77 passed, and 25 of 25 rules confirmed by
+deliberately breaking each one. End-to-end on `examples/sample-repo`: editing one
+function selects only the tests that ran it.
+
+### Phase 0.5 — The broker: one queue for the machine (done, v0.2.0)
+
+**Why it comes before any model decision.** Measured in the host project over one day,
+coordination cost more wall-clock time than test selection:
+- a ~4 h quiet window lost to a missed "go";
+- a 30-minute self-deadlock;
+- a cross-wait deadlock between a measurement and the background daemon;
+- trains waiting 1–2 h for each other.
+
+All of these came from **eight separate coordination mechanisms** (lock directories, a
+pause file, a test-lock wrapper, process-name matching, a markdown queue), each deciding
+for itself whom to respect.
+
+A second research pass (Oct 2026) found **no published system that coordinates several
+agent sessions' CI work on one machine.** The closest is an open, unanswered Vitest issue
+(#11559) describing this exact problem. The design borrows proven parts:
+
+| Part | Borrowed from | Used for |
+|---|---|---|
+| Tracked token budget | Make jobserver; Gentoo's system-wide jobserver work, which showed holder tracking is required | Sharing CPU |
+| Fencing tokens | Kleppmann, etcd | Stale authority |
+| EASY backfill with reservations | Slurm | Exclusive windows, long FIFO waits |
+| Preemption across a priority gap | Nomad | Cheap background work only |
+| Read-only-by-default tool surface | GitHub and Buildkite MCP servers | Agent access |
+
+**What shipped:**
+- A pure, event-sourced scheduler.
+- A broker process on a unix socket, where a lease's liveness is its connection.
+- `tracegate lease | queue | explain | history`.
+- An MCP server for agents.
+- An advisor hook for models: it may only permute a priority tier, its answers are cached,
+  and it runs in shadow by default.
+
+The full analysis is in [docs/design/broker.md](docs/design/broker.md).
+
+**Tests:**
+- **50 broker tests**, including regression scenarios that rebuild the three observed
+  failures (F1 cross-wait, F2 self-deadlock, F3 missed window) and require them to resolve
+  by themselves.
+- **9 new sabotage witnesses.** One of them caught a backfill test that could not fail,
+  and that test was fixed.
+
+**Next (0.5b):** adopt it in the host project and retire the eight mechanisms one by one.
+Exit: two weeks with no coordination incident.
+
 ### Phase 1 — Red Reader: an escalate-only opinion on every red (first model decision)
 
 - **When it runs:** after the gate re-runs a miss alone and it passes. Today that would be
@@ -172,6 +221,13 @@ enforce/no-enforce decision.
   This is the Uber SubmitQueue shape.
 - **Ownership.** Ordering is automatic. Composition is advice that the person or agent
   running the queue accepts or overrides, and it is logged.
+- **Where it plugs in:** the broker's advisor hook (Phase 0.5) already enforces the
+  guardrails. It can only permute a priority tier; answers are cached by input hash; it
+  runs in shadow by default. Conductor is an advisor command, not new scheduler code.
+- **Later:** footprint-partitioned trains. PRs whose Tracegate footprints are disjoint go
+  into independent sub-queues. This is novel: hosted queues partition by build targets,
+  none by per-test footprints. It ships only after its false-independence rate is
+  measured.
 
 **Scoring in shadow:** the rank of the first failing test versus a random order, and the
 bisections a risk-based split would have avoided.
