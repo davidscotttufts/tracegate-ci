@@ -48,7 +48,9 @@ check('packet: the MISS and how its re-run alone went', A.miss === true && A.rec
 check('packet: long failure text is clipped, and says so', B.text.length < 4200 && /more characters clipped/.test(B.text));
 check('packet: what changed against the first parent, with the diff', p.base === `${C2}^` && p.changed.some((l) => l.endsWith('src/a.ts')) && p.diff.includes('the change'), JSON.stringify(p.changed));
 check('packet: stored in the ledger and indexed', fs.existsSync(path.join(ledger, 'red', `${p.id}.json`)) && red.listRed()[0]?.id === p.id);
-check('packet: read back by id; a path in the id is refused', red.readPacket(p.id).id === p.id && (() => { try { red.readPacket('../../etc/passwd'); return false; } catch { return true; } })());
+// The traversal target EXISTS (a JSON file just outside red/), so only the id rule can refuse it.
+fs.writeFileSync(path.join(ledger, 'outside.json'), JSON.stringify({ id: 'outside' }));
+check('packet: read back by id; a path in the id is refused', red.readPacket(p.id).id === p.id && (() => { try { red.readPacket('../outside'); return false; } catch { return true; } })());
 
 // Opinions: closed world.
 const refused = (o) => { try { red.annotate(o); return false; } catch (e) { return /opinion refused/.test(e.message); } };
@@ -71,6 +73,7 @@ check('escalate-only: nothing in the predictor imports the Red Reader', !fs.read
 fs.writeFileSync(path.join(run, 'misses.txt'), '');
 const q = red.writePacket({ lane: 'default', run, base: C1 });
 red.annotate({ id: q.id, verdict: 'infra', escalate: false, confidence: 0.5, reasons: 'load' });
+check('packet ids are unique even for two packets in the same second from one process', q.id !== p.id && fs.existsSync(path.join(ledger, 'red', `${p.id}.json`)) && fs.existsSync(path.join(ledger, 'red', `${q.id}.json`)), `${p.id} ${q.id}`);
 check('list: newest first when nothing is escalated', red.listRed()[0].id === q.id);
 red.annotate({ ...good, reasons: 'escalating again with new evidence' });
 check('list: an escalated packet sorts above a newer one that is not', red.listRed()[0].id === p.id && red.listRed()[0].opinion.escalate === true);

@@ -135,7 +135,7 @@ const WITNESSES = [
     "if (st.limit.pressure === 'critical') return 0; // nothing new starts while memory is critical", '',
     'live: under critical pressure a gate waits', 'adaptive.mjs'],
   ['adaptive-shed-preemptible-only', 'src/broker/core.mjs',
-    'const cand = running.filter((r) => r.preemptible).sort(', 'const cand = running.filter((r) => true).sort(',
+    'const cand = real.filter((r) => r.preemptible).sort(', 'const cand = real.filter((r) => true).sort(',
     'I9 shedding: a gate alone over a reduced budget keeps running', 'adaptive.mjs'],
   ['adaptive-starvation-needs-idle', 'src/broker/core.mjs',
     'if (!res && !ourWorkRunning && !out.grants.length', 'if (!res && !out.grants.length',
@@ -186,6 +186,9 @@ const WITNESSES = [
   ['red-escalated-first', 'src/red.mjs',
     ".sort((a, b) => Number(!!b.opinion?.escalate) - Number(!!a.opinion?.escalate));", ';',
     'list: an escalated packet sorts above a newer one', 'red.mjs'],
+  ['red-unique-ids', 'src/red.mjs',
+    "${at.replace(/[-:.TZ]/g, '').slice(0, 17)}-${crypto.randomBytes(3).toString('hex')}`;", "${at.replace(/[-:.TZ]/g, '').slice(0, 14)}`;",
+    'packet ids are unique even for two packets in the same second', 'red.mjs'],
   ['red-strip-colour', 'src/red.mjs',
     "const plain = (s) => String(s ?? '').replace(/\\x1b\\[[0-9;]*m/g, '');", "const plain = (s) => String(s ?? '');",
     'packet: failure text, with terminal colour codes removed', 'red.mjs'],
@@ -196,6 +199,9 @@ const WITNESSES = [
   ['observe-tokens-count', 'src/broker/core.mjs',
     "observed: true, wouldWait: !(width > 0 && allowedByReservation) });\n      used += t;", "observed: true, wouldWait: !(width > 0 && allowedByReservation) });\n      used += 0;",
     'I10: its tokens count, so ordinary work still sees the real load', 'broker.mjs'],
+  ['observe-never-sheds-real-work', 'src/broker/core.mjs',
+    'const real = running.filter((r) => !r.observe);', 'const real = running;',
+    'I10: an observed job never preempts anything', 'broker.mjs'],
 ];
 
 // A broken rule can make a check wait forever, and a test blocked in spawnSync

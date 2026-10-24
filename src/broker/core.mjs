@@ -163,12 +163,17 @@ export function schedule(st, now) {
   // I9 shedding: the budget fell below what is running (load, heat or memory
   // pressure). Ask preemptible work to yield, cheapest first, until what is left
   // fits. Work that is not preemptible keeps running: it is never killed for load.
-  const overMem = () => Number.isFinite(memCap) && usedMB - shed.reduce((s, r) => s + r.reservedMB, 0) > memCap;
+  const overMem = () => Number.isFinite(memCap) && real.reduce((s, j) => s + j.reservedMB, 0) - shed.reduce((s, r) => s + r.reservedMB, 0) > memCap;
   const shed = [];
-  if (used > cap || st.limit.pressure === 'critical' || (Number.isFinite(memCap) && usedMB > memCap)) {
-    const cand = running.filter((r) => r.preemptible).sort((a, b) => (a.priority - b.priority) || (b.grantedAt - a.grantedAt));
+  // Only REAL leases decide shedding (I10): an observed job's tokens must never
+  // make the broker preempt anything. The load it really puts on the machine still
+  // reaches the budget, through the sampler.
+  const real = running.filter((r) => !r.observe);
+  const usedReal = real.reduce((s, j) => s + j.granted, 0);
+  if (usedReal > cap || st.limit.pressure === 'critical' || (Number.isFinite(memCap) && real.reduce((s, j) => s + j.reservedMB, 0) > memCap)) {
+    const cand = real.filter((r) => r.preemptible).sort((a, b) => (a.priority - b.priority) || (b.grantedAt - a.grantedAt));
     for (const r of cand) {
-      const left = used - shed.reduce((s, x) => s + x.granted, 0);
+      const left = usedReal - shed.reduce((s, x) => s + x.granted, 0);
       if (left <= cap && !overMem() && st.limit.pressure !== 'critical') break;
       shed.push(r);
       if (!r.preemptRequested) out.preempts.push({ id: r.id, by: 'pressure' });

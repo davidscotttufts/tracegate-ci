@@ -207,12 +207,16 @@ function sim(capacity) {
 
 // I10 — observe: adopt the broker beside other coordination without changing it
 {
-  const s = sim(2);
+  // Capacity 3: the gate leaves 1 token free, so only the OBSERVED job's tokens
+  // can make the later 1-token job wait.
+  const s = sim(3);
   const gate = s.add({ class: 'gate', tokens: 2, est: 600 }); s.step();
-  const obs = s.add({ class: 'gate', tokens: 2, observe: true, label: 'observed gate' }); s.step();
+  // Both queued before one step, so they are decided in the SAME scheduling pass:
+  // the observed grant must use up its tokens there, not only from the next pass.
+  const obs = s.add({ class: 'gate', tokens: 2, observe: true, label: 'observed gate' });
+  const later = s.add({ class: 'adhoc', tokens: 1 }); s.step();
   check('I10: an observed job is granted at once, even with no room', s.state(obs) === 'running');
   check('I10: ...and records that it WOULD have waited', s.st.jobs.get(obs).wouldWait === true && s.log.some((e) => e.type === 'grant' && e.id === obs && e.observed && e.wouldWait));
-  const later = s.add({ class: 'adhoc', tokens: 1 }); s.step();
   check('I10: its tokens count, so ordinary work still sees the real load', s.state(later) === 'queued');
   s.end(gate); s.end(obs); s.step();
   const free = s.add({ class: 'gate', tokens: 1, observe: true });

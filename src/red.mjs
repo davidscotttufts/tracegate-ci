@@ -19,6 +19,7 @@
 //   red/<id>.json               one packet per red run
 //   red-<host>.tsv              index: at, id, lane, head, failed, misses
 //   red-opinions-<host>.jsonl   one opinion per line
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -81,7 +82,9 @@ export function writePacket({ lane: laneName, run, base, rechecks = {}, note = n
   const names = tryGit('diff', '--name-status', baseRef, head).trim();
   const diff = tryGit('diff', '--unified=3', '--no-color', baseRef, head);
   const at = new Date().toISOString();
-  const id = `${laneName}-${head.slice(0, 12)}-${at.replace(/[-:.TZ]/g, '').slice(0, 14)}-${process.pid}`;
+  // Milliseconds plus a random suffix: two packets from one process within the same
+  // second must not share an id (MEASURED: they did, and the second overwrote the first).
+  const id = `${laneName}-${head.slice(0, 12)}-${at.replace(/[-:.TZ]/g, '').slice(0, 17)}-${crypto.randomBytes(3).toString('hex')}`;
   const packet = {
     v: 1, id, at, host: c.host, lane: laneName, head, base: baseRef, mode: pred?.mode ?? null,
     contended: process.env.TRACEGATE_CONTENDED === '1',
