@@ -39,7 +39,22 @@ take right now. Every default derives from the host, so one config serves a lapt
 session in the repository (Claude Code, for example) reads over MCP. The agent records
 an escalate-only opinion that never changes a verdict. See [Red Reader](#red-reader).
 
-Phases 1b–3 are not started. Version 0.4.0, not yet published to npm.
+**Phase 1b is done: escalation.** An escalated `real` opinion on a MISS raises the
+runner's automatic `flake` to `hole`, so the lane suspends. The stricter verdict wins,
+and a person's later triage has the last word. See [Red Reader](#red-reader).
+
+**Phase 2 is done, in shadow: the Conductor.** It ranks the files a run must execute
+fail-first and scores that order on every red run, without changing the set. It also
+advises how to compose a merge train: which PRs to gate alone, and which pairs have
+disjoint reach. See [Conductor](#conductor).
+
+**Phase 3 is done: dependency changes.** A lockfile change used to run the whole lane.
+Now a test whose footprint loaded no changed package keeps its verdict, once the rule has
+met its own bar. An oracle for the remaining cases runs in shadow only. See
+[Dependency changes](#dependency-changes).
+
+**Phase 0.5c is done: a make jobserver** per lease (`lease --jobserver`), so make,
+Ninja and cargo children stay within the grant. Version 0.5.0, not yet published to npm.
 
 ## The idea in one paragraph
 
@@ -237,6 +252,20 @@ compared with what the old mechanisms did, is the evidence for retiring them one
 time. The broker alone (`src/config.mjs` + `src/broker/`) can be vendored; its entry
 point is `src/broker/main.mjs`.
 
+**Retiring the first mechanism: `--yield` (I11).** Background work usually carries its
+own "stop when a gate starts" check. Register the gates with `observe --yield` and run
+the background work under a real preemptible lease
+(`lease --class daemon -- …`). The broker then asks it to yield, and holds new daemon
+leases, for as long as any yielding gate lives, which is the same rule the
+background script applied by itself. An observed job still never waits for, sheds or
+preempts work that is not preemptible.
+
+**A make jobserver per lease (`--jobserver`).** For a lease of N tokens the wrapper
+creates a FIFO holding N − 1 tokens and exports
+`MAKEFLAGS=-jN --jobserver-auth=fifo:PATH` (and `CARGO_MAKEFLAGS`). GNU make 4.4+,
+Ninja 1.13+, cargo and rustc then keep a whole build tree within the grant. A nested
+lease inherits its parent's jobserver.
+
 ### Adaptive capacity
 
 The broker sizes work to the machine as it is now, not as it was configured:
@@ -324,15 +353,94 @@ claude mcp add tracegate -- npx tracegate mcp --allow-write         # read_red, 
 
 **Escalate-only, by construction:**
 - Opinions are validated against a closed set of fields and stored in their own log.
-- Nothing that selects, reports, ingests or triages reads them.
+- Nothing that selects, reports or ingests reads them.
 - No code path leads from an opinion to `triage`, so a model cannot mark a miss a
   flake, lift a suspension or turn a red green.
 - `TRACEGATE_RED=off` stops writing packets.
 
+**The one effect an opinion has (Phase 1b): it can make the gate stricter.** An opinion
+with `verdict: real`, `escalate: true` and confidence ≥ `red.escalateMinConfidence`
+(default 0.7), on a file that was a MISS, writes an `escalations-<host>.tsv` row. The
+entry bar reads that row as `hole`, after the runner's automatic `flake`, so the lane
+suspends enforcement and runs whole. The latest verdict for a (lane, file, head) wins.
+A person who reads the escalation and still runs `tracegate triage --verdict flake`
+overrides it. `red score` reports how many escalations were raised and how many a
+person overrode. `TRACEGATE_RED_ESCALATE=off` (or `"red": {"escalate": false}`)
+turns this off.
+
+## Conductor
+
+**Fail-first ordering.** It ranks every file that will run, in this order:
+1. a recent failure;
+2. its own test file changed;
+3. code it executed changed;
+4. something it loaded or read changed;
+5. a lane-wide reason;
+
+with shorter files first among equals. On a red run the rank of the first failure is
+logged against what a random order would average (`conductor-<host>.tsv`). The set of
+files never changes.
+
+`"conductor": {"mode": "order"}` also hands the order to Vitest. Add the sequencer to
+the Vitest config:
+
+```ts
+import TracegateSequencer from 'tracegate-ci/sequencer';
+export default defineConfig({ test: { sequence: { sequencer: TracegateSequencer } } });
+```
+
+**Train advice.** It only advises:
+
+```sh
+tracegate conductor train --lane api --pr 12=origin/pr-12 --pr 13=origin/pr-13 --base origin/main
+tracegate conductor outcome --id <advice id> --red 12 [--combination]
+tracegate conductor score
+```
+
+For each PR it computes the test files the change can reach, at file level, from the
+latest footprints. It advises training a PR alone if the PR touches a global input, or
+reaches more than a quarter of the lane and twice the median of the others. It also
+lists the pairs whose reach is disjoint, the candidates for footprint-partitioned
+trains. Score the advice with `outcome`:
+- red PRs the advice had sent alone are bisections saved;
+- a pair called independent that was red only in combination is a false independence.
+  That rate must be measured before anything relies on partitioning.
+
+## Dependency changes
+
+Footprints record which installed packages each test file's worker loaded, and the
+reporter (`tracegate-ci/reporter`, added by `tracegate run`) records what the Vitest
+main process loaded: the config, plugins, transforms and global setup. On a lockfile
+change, a file keeps its verdict only if all of these hold:
+- both lists were recorded, and every `node_modules` they saw is inside the repository;
+- the lockfile is an npm v2/v3 `package-lock.json`;
+- no changed package has an install script or an os/cpu restriction;
+- the Vitest process loaded no changed package;
+- the file's worker loaded no changed package.
+
+When a package changes, so do its nested copies (`a/node_modules/b`) and the packages
+that resolve them. A `package.json` edit that only moves dependency fields is covered.
+Any other edit is still a global input.
+
+The rule has its own bar (`deps.mode` `auto`, `deps.bar`, default 3 lockfile runs over
+1 day). Until a run meets it, files the rule would reuse still run, and the run logs how
+many of them failed (`deps-<host>.tsv`). After that, its reuses are ordinary reuse
+decisions: audited, and a miss suspends the lane. `TRACEGATE_DEPS=off|shadow|auto|enforce`.
+
+**The oracle, in shadow only.** Every lockfile run writes a dependency packet. Each
+changed package gets its version move, its semver class, whether it has native code, and
+whether the Vitest process loaded it. The packet also records which files failed in that
+full run. An agent reads it over MCP (`deps_runs`, `read_deps`) and records which test
+files it predicts the bump can affect (`annotate_deps`, or `agents/deps-oracle.md`).
+`tracegate deps score` reports recall over the failures and the share of the lane each
+prediction would have run. Nothing reads predictions back, and nothing is ever skipped
+on one.
+
 ## How a decision is made
 
 A footprint recorded at commit C is valid on tree H only if: same footprint format, same
-Node version, same lockfile, younger than 72 h, C still exists, and no change between C and
+Node version, same lockfile (or a lockfile change the [dependency rule](#dependency-changes)
+accounts for), younger than 72 h, C still exists, and no change between C and
 H touches a global input, the test file, a non-source module it loaded, an executed
 function, a constant its code names, a top-level statement of a module it loaded, a
 module that could not be mapped, or a path it read or listed.
@@ -354,7 +462,7 @@ Any change to an unmapped module means "run", so predictions stay safe but get c
 
 ```sh
 npm install                 # typescript, for parsing
-npm test                    # the self-test (77 checks), the broker (50), adaptive capacity (74), the Red Reader
+npm test                    # self-test, broker, adaptive capacity, Red Reader, dependency rule, Conductor, jobserver
 node test/sabotage.mjs      # breaks each rule in a temp copy; each must turn the self-test red
 bash examples/e2e.sh        # end-to-end on examples/sample-repo (needs network for npm install)
 ```

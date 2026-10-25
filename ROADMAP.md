@@ -279,6 +279,21 @@ enforce/no-enforce decision.
 > **1b (not done, needs the owner's decision with `red score` data):** let an
 > escalated `real` opinion on a MISS raise the deterministic `flake` to `hole` (the
 > stricter verdict wins), as planned above.
+>
+> **CORRECTION (2026-10-25): 1b is done (v0.5.0), on the owner's decision, before any
+> `red score` data.** That ordering is acceptable only because 1b can make a gate
+> stricter and nothing else:
+> - The opinion must say `real`, `escalate: true` and confidence ≥ 0.7, and the file
+>   must have been a MISS.
+> - It writes an `escalations-` row, which the entry bar reads as `hole`.
+> - The latest verdict for (lane, file, head) wins, so a person's later `flake`
+>   overrides it.
+>
+> The worst case of a bad escalation is a lane that runs whole until someone triages
+> it. `red score` now also counts raised and overridden escalations; each override is
+> a false escalation. Four sabotage witnesses guard the rule: an escalation re-suspends,
+> the latest verdict wins, only a MISS escalates, and nothing escalates below the
+> confidence floor.
 
 ### Phase 2 — Conductor: fail-first ordering and risk-aware train composition
 
@@ -303,6 +318,24 @@ bisections a risk-based split would have avoided.
 
 **Exit:** a measured time-to-red improvement with no change to the set that runs.
 
+> **CORRECTION (2026-10-25): what shipped (v0.5.0), and the one change of plan.** As in
+> Phase 1, the model is an agent session, not a CI call. CI cannot wait for a session,
+> so the live ranker is deterministic:
+> - Inputs: the predictor's own reason for each file, recent failures from Red Reader
+>   packets, and duration.
+> - Output: `order.txt` in every run. On a red run, the rank of the first failure is
+>   scored against a random order's expectation (`conductor-<host>.tsv`).
+> - The set never changes, and a test asserts the predictor does not read the
+>   Conductor.
+>
+> Shadow is the default. `conductor.mode: order` hands the order to Vitest through
+> `tracegate-ci/sequencer`. Train advice is `tracegate conductor train`: PRs touching a
+> global input, or reaching far more of the lane than the others, go alone, and
+> disjoint pairs are listed. `conductor outcome` and `score` measure saved bisections
+> and the **false-independence rate**. Partitioned trains stay unbuilt until that rate
+> is known. An agent-ranked order through the broker's advisor hook remains possible
+> and is not wired.
+
 ### Phase 3 — Dependency changes: a deterministic rule first, then a dependency oracle
 
 1. **Deterministic rule.** Footprints record which packages each test loaded. On a lockfile
@@ -319,6 +352,27 @@ bisections a risk-based split would have avoided.
 
 **Exit:** the deterministic rule enforced; the oracle's shadow precision and recall
 published, whatever they show.
+
+> **CORRECTION (2026-10-25): what shipped (v0.5.0).**
+> - **The rule** (`src/deps.mjs`, `depsVerdict` in the predictor):
+>   - Footprints record the packages a worker loaded. A reporter records the packages
+>     the Vitest main process loaded; those are global, because a plugin or transform
+>     changes every test without appearing in any worker.
+>   - The rule applies only to npm v2/v3 lockfiles, with both lists known and every
+>     `node_modules` inside the repository.
+>   - Native packages (install script, os/cpu) are global.
+>   - Nested copies also change the package that resolves them.
+>   - A dependency-only `package.json` edit is covered; nothing else about either
+>     file is waived for a test that read it.
+>   - It enforces only after its own bar (3 lockfile runs over 1 day with no failure
+>     among the files it would have reused). Before that, those files run, and the run
+>     logs how they went.
+> - **The oracle** is the agent-session pattern again: a dependency packet per lockfile
+>   run, `annotate_deps` over MCP (closed world), and `deps score` with recall and
+>   share. It is shadow only and skips nothing.
+> - **Known gaps:** a package a test only spawns as a process, and a native addon
+>   loaded with dlopen, are invisible to V8 coverage. The audit, the full-run backstop
+>   and the rule's own bar are what would catch them.
 
 ### Out of scope, deliberately
 

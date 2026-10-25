@@ -6,7 +6,10 @@
 //   exec   — per source module, the V8 start offsets of every EXECUTED function,
 //            plus the hash of the compiled text they index into;
 //   loaded — every repo module the file evaluated;
-//   reads  — every repo path the worker read, listed or stat'ed (symlinks resolved).
+//   reads  — every repo path the worker read, listed or stat'ed (symlinks resolved);
+//   pkgs   — every installed package (`<dir>/node_modules/<name>`) the worker had
+//            loaded or read so far, or null when a node_modules lies outside the
+//            repository (then nothing about packages is known; Phase 3).
 // `tracegate ingest` turns these into ledger entries after the run.
 //
 // It never changes what a test sees: no mocks, no return values, no timing it
@@ -36,6 +39,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { syncBuiltinESMExports } from 'node:module';
 import vm from 'node:vm';
+import { pkgOf } from './pkg.mjs';
 
 const WRAP_HEAD = "'use strict';async (";
 const FS_SYNC = ['readFileSync', 'readdirSync', 'statSync', 'lstatSync', 'existsSync', 'openSync', 'accessSync', 'opendirSync', 'createReadStream'];
@@ -126,6 +130,16 @@ export async function installRecorder({ afterAll, expect, repoRoot, srcPrefix })
     const loaded = [];
     const exec = {};
     const unmapped = [];
+    // Packages: every script in the result, not only those that ran in this file.
+    // A module is evaluated once per worker, so this is everything the worker has
+    // loaded: a superset, which can only cause runs.
+    const pkgs = new Set(st.pkgReads); let pkgsKnown = st.pkgsKnown;
+    for (const s of result) {
+      if (!s.url.startsWith('file://') || !s.url.includes('/node_modules/')) continue;
+      const abs = decodeURIComponent(s.url.slice(7)).split('?')[0];
+      const k = pkgOf(abs, st.repoRoot);
+      if (k) pkgs.add(k); else pkgsKnown = false; // a node_modules outside the repo
+    }
     for (const s of result) {
       if (!s.url.startsWith(filePrefix) || s.url.includes('/node_modules/')) continue;
       const file = decodeURIComponent(s.url.slice(filePrefix.length)).split('?')[0];
@@ -142,7 +156,7 @@ export async function installRecorder({ afterAll, expect, repoRoot, srcPrefix })
       exec[file] = { code: mm.sha, offs };
     }
     const testFile = testPath.startsWith(st.repoRoot + '/') ? testPath.slice(st.repoRoot.length + 1) : testPath;
-    const out = { v: 2, testFile, node: process.version, loaded: [...new Set(loaded)].sort(), exec, unmapped, reads: [...st.reads].sort() };
+    const out = { v: 2, testFile, node: process.version, loaded: [...new Set(loaded)].sort(), exec, unmapped, reads: [...st.reads].sort(), pkgs: pkgsKnown ? [...pkgs].sort() : null };
     const name = createHash('sha256').update(testFile).digest('hex').slice(0, 24) + '.json';
     st.write(path.join(st.outDir, 'raw', name), JSON.stringify(out));
   });
@@ -161,6 +175,8 @@ async function init(outDir, repoRoot, srcPrefix) {
   await session.post('Profiler.startPreciseCoverage', { callCount: false, detailed: false });
 
   const reads = new Set();
+  const pkgReads = new Set(); // packages read as files (data, package.json), per worker
+  const st0 = { pkgsKnown: true };
   const modules = new Map(); // absolute source path → { len, sha }
   const realCache = new Map();
   const realpath = fs.realpathSync.native;
@@ -176,6 +192,9 @@ async function init(outDir, repoRoot, srcPrefix) {
         realCache.set(abs, r);
       }
       if (r.startsWith(prefixRoot) && !r.includes('/node_modules/')) reads.add(r.slice(prefixRoot.length));
+      // A package read as a file is an input of the package's. A read in a dot
+      // directory (`.vite` caches) is not a package; one outside the repo is unknown.
+      else if (r.includes('/node_modules/')) { const k = pkgOf(r, repoRoot); if (k) pkgReads.add(k); else if (!r.startsWith(prefixRoot)) st0.pkgsKnown = false; }
     } catch { /* tracing must never change behaviour */ }
   };
   const codesDir = path.join(outDir, 'codes');
@@ -219,5 +238,5 @@ async function init(outDir, repoRoot, srcPrefix) {
   syncBuiltinESMExports();
 
   fs.mkdirSync(path.join(outDir, 'raw'), { recursive: true });
-  return { session, reads, modules, repoRoot, srcPrefix, outDir, write };
+  return { session, reads, modules, repoRoot, srcPrefix, outDir, write, pkgReads, get pkgsKnown() { return st0.pkgsKnown; } };
 }

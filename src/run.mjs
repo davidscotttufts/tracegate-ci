@@ -8,15 +8,23 @@
 //   5. recheck  each MISS re-run ONCE, alone, at the same tree; a pass is triaged `flake`
 //   6. ingest   footprints of green files, only if HEAD did not move during the run
 //   7. full     a green whole-lane run is recorded as a complete full run
+// Beside those: the Conductor's fail-first order is written (and handed to
+// vitest under conductor.mode `order`) and scored on a red run; a lockfile run
+// leaves a dependency packet for the oracle (Phases 2 and 3, both shadow).
 // The exit code is vitest's. Nothing here can turn a red run green.
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
-import { ctx, lane } from './config.mjs';
+import { fileURLToPath } from 'node:url';
+import { rank, recentFailures, scoreOrder } from './conductor.mjs';
+import { ctx, git, lane, lockfileOf } from './config.mjs';
+import { lockDiff, writeDepsPacket } from './deps.mjs';
 import { effectiveMode, fullDone, head, ingest, loadResults, report, select, triage } from './predictor.mjs';
 import { writePacket } from './red.mjs';
+
+const REPORTER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'vitest-reporter.mjs');
 
 function vitestBin(laneAbs) {
   return path.join(path.dirname(createRequire(path.join(laneAbs, 'package.json')).resolve('vitest/package.json')), 'vitest.mjs');
@@ -47,7 +55,18 @@ export function runLane(o, userArgs) {
     return vitest(ln, userArgs, { TRACEGATE_RECORD: '' });
   }
   const recEnv = { TRACEGATE_RECORD: run, TRACEGATE_ROOT: c.root, TRACEGATE_LANE: ln.name };
-  const reporters = ['--reporter=default', '--reporter=json', `--outputFile.json=${path.join(run, 'results.json')}`];
+  const reporters = ['--reporter=default', '--reporter=json', `--outputFile.json=${path.join(run, 'results.json')}`, `--reporter=${REPORTER}`];
+  // Phase 2: the fail-first order of what will run. It never changes the set.
+  const cmode = c.conductor.mode;
+  let order = null;
+  if (cmode !== 'off') {
+    try {
+      const pred = JSON.parse(fs.readFileSync(path.join(run, 'predict.json'), 'utf8'));
+      order = rank(pred.decisions, sel.selected, recentFailures());
+      fs.writeFileSync(path.join(run, 'order.txt'), order.map((f) => path.join(c.root, f)).join('\n') + '\n');
+      if (cmode === 'order') recEnv.TRACEGATE_ORDER = path.join(run, 'order.txt');
+    } catch (e) { console.log(`tracegate (${ln.name}): no fail-first order (${e.message}); vitest's own order is used.`); order = null; }
+  }
   let rc = 0;
   if (mode === 'enforce' && sel.selected.length === 0) {
     console.log(`tracegate: every ${ln.name} verdict is reusable at this tree — no file needs to run.`);
@@ -76,8 +95,33 @@ export function runLane(o, userArgs) {
       console.log(`\x1b[31mtracegate (${ln.name}): ${m} FAILS alone at this tree too — a real MISS (a footprint hole). The lane stays suspended.\x1b[0m`);
     }
   }
+  if (rc !== 0 && order) {
+    const failed = new Set([...results].filter(([, r]) => r.status === 'failed').map(([f]) => f));
+    const sc = scoreOrder({ lane: ln.name, head: rep?.head ?? headAtStart, order, failed, mode: cmode });
+    if (sc) console.log(`tracegate (${ln.name}): fail-first (${cmode}) put the first failure at ${sc.rank} of ${sc.files}; a random order would average ${sc.randomExpected}.`);
+  }
+  // Phase 3 oracle (shadow): a run whose lockfile differs from its first parent's
+  // leaves a dependency packet. Nothing reads predictions back.
+  if (process.env.TRACEGATE_DEPS_PACKET !== 'off') {
+    try {
+      const lf = lockfileOf(ln);
+      const H = rep?.head ?? headAtStart;
+      const baseRef = o.base && o.base !== true ? o.base : `${H}^`;
+      const show = (ref) => { try { return git('show', `${ref}:${lf}`); } catch { return null; } };
+      const d = lf ? lockDiff(show(baseRef), show(H)) : null;
+      if (d && d.changed.size) {
+        const key = (k) => (path.posix.dirname(lf) === '.' ? k : `${path.posix.dirname(lf)}/${k}`);
+        let runner = []; try { runner = JSON.parse(fs.readFileSync(path.join(run, 'runner-pkgs.json'), 'utf8')) ?? []; } catch { /* none */ }
+        const failed = [...results].filter(([, r]) => r.status === 'failed').map(([f]) => f);
+        const diff = { changed: new Set([...d.changed].map(key)), native: d.native.map(key), versions: Object.fromEntries(Object.entries(d.versions).map(([k, v]) => [key(k), v])) };
+        const p = writeDepsPacket({ lane: ln.name, head: H, lockfile: lf, diff, runner, files: sel.files, failed });
+        console.log(`tracegate (${ln.name}): dependency packet ${p.id} (${p.packages.length} changed package(s)) — an agent can predict which tests it affects with the MCP tool annotate_deps; it is scored, never used.`);
+      }
+    } catch (e) { console.log(`tracegate (${ln.name}): no dependency packet (${e.message}).`); }
+  }
   // Red Reader (Phase 1): a red run leaves a packet for an agent to read. It
-  // only records; nothing reads opinions back. TRACEGATE_RED=off skips it.
+  // only records; the one thing an opinion can do is escalate a MISS (Phase 1b).
+  // TRACEGATE_RED=off skips it.
   if (rc !== 0 && process.env.TRACEGATE_RED !== 'off') {
     try { const p = writePacket({ lane: ln.name, run, base: o.base, rechecks }); console.log(`tracegate (${ln.name}): red packet ${p.id} — an agent can read it with \`tracegate red show ${p.id}\` or the MCP tool read_red.`); }
     catch (e) { console.log(`tracegate (${ln.name}): could not write the red packet (${e.message}); the run is red either way.`); }

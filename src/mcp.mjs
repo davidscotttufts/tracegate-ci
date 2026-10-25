@@ -2,8 +2,9 @@
 //
 // Agents coordinate through the broker instead of messaging each other. Read
 // tools are always on. The write tools need --allow-write: `cancel_queued` can only
-// cancel a QUEUED job, never a running one, and `annotate_red` only records an
-// escalate-only opinion that nothing in Tracegate reads back. Work itself is done with
+// cancel a QUEUED job, never a running one; `annotate_red` records an escalate-only
+// opinion (its one effect can only make a gate stricter, Phase 1b); `annotate_deps`
+// records a shadow prediction nothing reads back. Work itself is done with
 // `tracegate lease -- …` in the agent's own shell, so a lease stays bound to the
 // process that does the work (its liveness is that process's connection).
 //
@@ -11,7 +12,7 @@
 import { call } from './broker/client.mjs';
 
 const SUPPORTED = ['2025-06-18', '2025-03-26', '2024-11-05'];
-const pkg = { name: 'tracegate', version: '0.4.0' };
+const pkg = { name: 'tracegate', version: '0.5.0' };
 
 const READ_TOOLS = [
   {
@@ -57,6 +58,20 @@ const READ_TOOLS = [
     run: async ({ id }) => (await import('./red.mjs')).readPacket(id),
   },
   {
+    name: 'deps_runs',
+    description: 'Recent lockfile runs (newest first): one dependency packet each, with how many packages changed and how many files failed, and whether a prediction was recorded. Read one with read_deps.',
+    inputSchema: { type: 'object', properties: { n: { type: 'integer', minimum: 1, maximum: 200, default: 20 } }, additionalProperties: false },
+    annotations: { readOnlyHint: true },
+    run: async ({ n }) => (await import('./deps.mjs')).listDeps(n ?? 20),
+  },
+  {
+    name: 'read_deps',
+    description: 'One dependency packet: every package the lockfile change moved (name, from → to, semver class, native code, whether the vitest process loaded it), the lane size, and which files failed in the full run. Read the changelogs and the code that uses the package before predicting.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false },
+    annotations: { readOnlyHint: true },
+    run: async ({ id }) => (await import('./deps.mjs')).readDepsPacket(id),
+  },
+  {
     name: 'lane_mode',
     description: 'Tracegate\'s test-selection mode per lane (off, shadow or enforce) and why, from the repository\'s tracegate.config.json.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
@@ -72,7 +87,7 @@ const READ_TOOLS = [
 const WRITE_TOOLS = [
   {
     name: 'annotate_red',
-    description: 'Record an ESCALATE-ONLY opinion on a red-run packet. It is stored and shown to people; it never changes a verdict, never triages a miss, never merges or re-runs anything. verdict: real (the change broke it), flake-suspect (fails on its own; say why), infra (machine, network, contention), unclear. Set escalate=true when a person should look now (for example a MISS you believe is a real footprint hole, or a red you believe is real but was waved through). Give reasons that cite files and lines.',
+    description: 'Record an ESCALATE-ONLY opinion on a red-run packet. It is stored and shown to people; it never lowers a verdict, never marks anything a flake, never merges or re-runs anything. Its one effect: verdict real + escalate true + confidence ≥ 0.7 on a file that was a MISS raises the automatic flake to a hole, so the lane runs whole until a person triages it. verdict: real (the change broke it), flake-suspect (fails on its own; say why), infra (machine, network, contention), unclear. Set escalate=true when a person should look now (for example a MISS you believe is a real footprint hole, or a red you believe is real but was waved through). Give reasons that cite files and lines.',
     inputSchema: { type: 'object', properties: {
       id: { type: 'string' }, verdict: { type: 'string', enum: ['real', 'flake-suspect', 'infra', 'unclear'] }, escalate: { type: 'boolean' },
       confidence: { type: 'number', minimum: 0, maximum: 1 }, reasons: { type: 'string', minLength: 1, maxLength: 4000 },
@@ -80,6 +95,16 @@ const WRITE_TOOLS = [
     }, required: ['id', 'verdict', 'escalate', 'confidence', 'reasons'], additionalProperties: false },
     annotations: { readOnlyHint: false, destructiveHint: false },
     run: async (a) => (await import('./red.mjs')).annotate({ ...a, by: a.by ?? 'mcp' }),
+  },
+  {
+    name: 'annotate_deps',
+    description: 'Record a SHADOW prediction for a dependency packet: which test files the package change can affect (a list of files, or "all", or "none"). It is scored against the full run the gate already did; nothing reads it back and it never skips a test.',
+    inputSchema: { type: 'object', properties: {
+      id: { type: 'string' }, affected: { oneOf: [{ type: 'string', enum: ['all', 'none'] }, { type: 'array', items: { type: 'string' }, maxItems: 5000 }] },
+      confidence: { type: 'number', minimum: 0, maximum: 1 }, reasons: { type: 'string', minLength: 1, maxLength: 4000 },
+    }, required: ['id', 'affected', 'confidence', 'reasons'], additionalProperties: false },
+    annotations: { readOnlyHint: false, destructiveHint: false },
+    run: async (a) => (await import('./deps.mjs')).annotateDeps({ ...a, by: 'mcp' }),
   },
   {
     name: 'cancel_queued',

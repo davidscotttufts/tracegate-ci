@@ -84,6 +84,24 @@ fs.writeFileSync(path.join(ledger, 'triage-redtest.tsv'), `at\tlane\tfile\thead\
 const sc = red.score();
 check('score: an opinion is compared with the later triage of the same file and head', sc.scored === 3 && sc.agree === 2 && sc.disagree.length === 1 && sc.disagree[0].said === 'flake-suspect', JSON.stringify(sc));
 
+// Phase 1b: an escalated `real` opinion on a MISS raises the runner's flake to a hole.
+const pred = await import('../src/predictor.mjs');
+const h12 = C2.slice(0, 12);
+const t0 = new Date(Date.now() - 60_000).toISOString(); const t1 = new Date(Date.now() - 30_000).toISOString();
+fs.writeFileSync(path.join(ledger, 'misses-redtest.tsv'), `at\tlane\thead\tfile\treason\n${t0}\tdefault\t${h12}\ttest/a.test.ts\treusable\n`);
+fs.writeFileSync(path.join(ledger, 'triage-redtest.tsv'), `at\tlane\tfile\thead\tverdict\n${t1}\tdefault\ttest/a.test.ts\t${h12}\tflake\n`);
+fs.rmSync(path.join(ledger, 'escalations-redtest.tsv'), { force: true });
+check('escalation: before any opinion, the recheck flake excuses the miss', pred.entryBar('default').recentMiss === false);
+check('escalation: a red that was NOT a miss is not escalated', red.annotate({ ...good, files: ['test/b.test.ts'], confidence: 0.95 }).escalated.length === 0 && pred.entryBar('default').recentMiss === false);
+check('escalation: below the confidence floor nothing is raised', red.annotate({ ...good, confidence: 0.5 }).escalated.length === 0 && pred.entryBar('default').recentMiss === false);
+check('escalation: a flake-suspect or un-escalated opinion raises nothing', red.annotate({ ...good, escalate: false, confidence: 0.95 }).escalated.length === 0 && pred.entryBar('default').recentMiss === false);
+const esc = red.annotate({ ...good, confidence: 0.9 });
+check('escalation: a confident escalated MISS suspends the lane again', esc.escalated.join() === 'test/a.test.ts' && pred.entryBar('default').recentMiss === true, JSON.stringify(esc.escalated));
+await new Promise((r) => setTimeout(r, 5));
+pred.triage({ lane: 'default', file: 'test/a.test.ts', head: h12, verdict: 'flake' });
+check('escalation: a person who says flake afterwards has the last word', pred.entryBar('default').recentMiss === false);
+check('escalation: score counts it raised, and overridden by the person', (() => { const x = red.score(); return x.raised === 1 && x.overridden === 1; })(), JSON.stringify(red.score()));
+
 // MCP: read tools always; the write tool only with --allow-write.
 async function mcpTools(args) {
   const m = spawn(process.execPath, [CLI, 'mcp', ...args], { env: { ...process.env, TRACEGATE_BROKER_DIR: path.join(tmp, 'b'), TRACEGATE_BROKER_SOCKET: path.join(tmp, 's.sock') }, stdio: ['pipe', 'pipe', 'ignore'] });

@@ -1,6 +1,6 @@
 // Talking to the broker: a connection (starting the broker if none is running),
 // request/response calls, and `tracegate lease`, which runs a command under a lease.
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -77,6 +77,33 @@ export async function call(msg, opts) {
 }
 
 /**
+ * Phase 0.5c: a make-compatible jobserver for one lease. GNU make 4.4+, Ninja
+ * 1.13+, cargo and rustc read `--jobserver-auth=fifo:PATH` from MAKEFLAGS: each
+ * job beyond the first takes one byte from the FIFO and puts it back when done,
+ * so a whole build tree stays within the lease's grant. The lease itself is the
+ * implicit first token, so the FIFO holds tokens − 1. Returns null for one token.
+ */
+export function makeJobserver(tokens) {
+  if (!(tokens > 1)) return null;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-js-'));
+  const fifo = path.join(dir, 'jobserver');
+  const r = spawnSync('mkfifo', ['-m', '600', fifo]);
+  if (r.status !== 0) { fs.rmSync(dir, { recursive: true, force: true }); return null; }
+  // Held open read-write by the lease for its whole life: a FIFO with no writer
+  // left reads EOF, which make treats as a broken jobserver.
+  const fd = fs.openSync(fifo, fs.constants.O_RDWR | fs.constants.O_NONBLOCK);
+  fs.writeSync(fd, Buffer.alloc(tokens - 1, '+'));
+  const flags = `-j${tokens} --jobserver-auth=fifo:${fifo}`;
+  return {
+    fifo, flags,
+    env: { MAKEFLAGS: flags, CARGO_MAKEFLAGS: flags },
+    /** Tokens back in the FIFO now (a child that died holding one leaks it until the lease ends). */
+    available() { const b = Buffer.alloc(tokens); let n = 0; try { n = fs.readSync(fd, b, 0, tokens, null); } catch { n = 0; } if (n > 0) fs.writeSync(fd, b.subarray(0, n)); return n; },
+    close() { try { fs.closeSync(fd); } catch { /* closed */ } fs.rmSync(dir, { recursive: true, force: true }); },
+  };
+}
+
+/**
  * `tracegate lease [--class c] [--tokens n] [--min-tokens m] [--mem-per-token MB]
  *                  [--exclusive] [--est s] [--label l] [--deadline-min m] [--requeue] -- <command…>`
  * Waits for a grant, runs the command with TRACEGATE_LEASE / TRACEGATE_FENCE /
@@ -84,7 +111,8 @@ export async function call(msg, opts) {
  * capacity may be less than --tokens and no less than --min-tokens), and
  * TRACEGATE_CONTENDED=1 when the broker started it on a busy machine past its
  * starvation limit. Releases on exit, forwards the exit code. Preempted: SIGTERM
- * to the command's process group, exit 75 (or requeue).
+ * to the command's process group, exit 75 (or requeue). `--jobserver` also
+ * exports a make jobserver sized to the grant (makeJobserver, Phase 0.5c).
  */
 export async function lease(o, argv) {
   if (!argv.length) throw new Error('lease: nothing to run (put the command after --)');
@@ -118,11 +146,15 @@ export async function lease(o, argv) {
           say(`${id} granted ${m.tokens} token(s)${m.memMB ? ` and ${m.memMB} MB` : ''}, fence ${m.fence}${m.nested ? ' (inside the parent lease)' : ''}`);
           if (m.contended) say(`${id} starts CONTENDED: the machine stayed busy past the starvation limit, so a red here is not evidence on its own`);
           const contended = m.contended || process.env.TRACEGATE_CONTENDED === '1';
+          // A nested lease runs inside its parent's grant: it inherits the parent's jobserver.
+          const js = o.jobserver && !m.nested ? makeJobserver(m.tokens) : null;
+          if (js) say(`${id} jobserver ${js.fifo} with ${m.tokens - 1} token(s) (MAKEFLAGS=${js.flags})`);
           child = spawn(argv[0], argv.slice(1), {
             stdio: 'inherit', detached: true,
             env: { ...process.env, TRACEGATE_LEASE: id, TRACEGATE_FENCE: String(m.fence), TRACEGATE_TOKENS: String(m.tokens), VITEST_MAX_WORKERS: String(m.tokens),
-              ...(contended ? { TRACEGATE_CONTENDED: '1' } : {}) },
+              ...(contended ? { TRACEGATE_CONTENDED: '1' } : {}), ...(js ? js.env : {}) },
           });
+          if (js) child.on('exit', () => { const back = js.available(); if (back < m.tokens - 1) say(`${id} jobserver: ${m.tokens - 1 - back} token(s) were never returned (a child died holding them)`); js.close(); });
           const fwd = (sig) => { try { process.kill(-child.pid, sig); } catch { /* gone */ } };
           process.on('SIGINT', () => fwd('SIGINT'));
           process.on('SIGTERM', () => fwd('SIGTERM'));
@@ -157,13 +189,14 @@ export async function lease(o, argv) {
 }
 
 /**
- * `tracegate observe --class c [--tokens n] [--label l] --watch-pid P [--quiet]`
+ * `tracegate observe --class c [--tokens n] [--label l] [--yield] --watch-pid P [--quiet]`
  * Phase 0.5b (I10): register work that is coordinated by something else, without
  * waiting. The broker grants it at once and records whether it WOULD have waited,
  * and behind whom; its tokens count, and P's process tree is measured. The holder
  * stays connected until P exits, then exits itself. Meant to be started in the
  * background by an existing script: `tracegate observe … --watch-pid $$ &`.
  * It never blocks, never fails its caller, and ignores preemption (it logs it).
+ * `--yield` (I11): preemptible leases yield to it and wait while it lives.
  */
 export async function observe(o) {
   const pid = Number(o['watch-pid']);
@@ -179,7 +212,7 @@ export async function observe(o) {
     else if (m.type === 'preempt') say(`${m.id}: the broker would have preempted this for ${m.by} (observe: not acted on)`);
     else if (m.type === 'error') say(`broker refused: ${m.error}`);
   });
-  c.send({ op: 'request', observe: true, class: o.class && o.class !== true ? o.class : 'adhoc', tokens: o.tokens !== undefined ? Number(o.tokens) : 1,
+  c.send({ op: 'request', observe: true, ...(o.yield ? { yield: true } : {}), class: o.class && o.class !== true ? o.class : 'adhoc', tokens: o.tokens !== undefined ? Number(o.tokens) : 1,
     exclusive: !!o.exclusive, label: o.label && o.label !== true ? o.label : `pid ${pid}` });
   await new Promise((resolve) => {
     const t = setInterval(() => { if (!alive()) { clearInterval(t); resolve(); } }, 2000);

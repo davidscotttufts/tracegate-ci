@@ -26,11 +26,12 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { ctx, git, lane, lockfileOf, isTestFile, isTsFile, FP_VERSION } from './config.mjs';
+import { depsBar, depsOnlyPackageJson, lockDiff, repoKey } from './deps.mjs';
 import { model } from './model.mjs';
 import { ModuleMap } from './recorder.mjs';
 import {
   appendTsv, dropFps, getBlob, ledgerDir, putBlob, readFps, readTsv, writeFp,
-  FULL_HEADER, MISSES_HEADER, REASONS_HEADER, SHADOW_HEADER, TRIAGE_HEADER,
+  DEPS_HEADER, FULL_HEADER, MISSES_HEADER, REASONS_HEADER, SHADOW_HEADER, TRIAGE_HEADER,
 } from './ledger.mjs';
 
 // ── replay state ─────────────────────────────────────────────────────────────
@@ -91,6 +92,10 @@ export function ingest(o) {
   const raws = fs.existsSync(rawDir) ? fs.readdirSync(rawDir).filter((f) => f.endsWith('.json')) : [];
   const lock = lockHash(ln.name);
   const c = ctx();
+  // Phase 3: packages the vitest main process loaded (vitest-reporter.mjs). Absent
+  // or null = unknown, and the dependency rule does not apply to this run's footprints.
+  let runnerPkgs = null; try { runnerPkgs = JSON.parse(fs.readFileSync(path.join(run, 'runner-pkgs.json'), 'utf8')); } catch { /* not recorded */ }
+  const runnerBlob = Array.isArray(runnerPkgs) ? putBlob(runnerPkgs) : null;
   _fileInfo.clear(); refFiles.clear();
   let recorded = 0, dropped = 0, noVerdict = 0, unmapped = 0, mapped = 0, overBudget = 0;
   // A hard time budget, so ingest never holds the end of a run for long.
@@ -159,6 +164,7 @@ export function ingest(o) {
     writeFp(ln.name, {
       v: FP_VERSION, lane: ln.name, testFile: raw.testFile, commit: H, node: raw.node, lock,
       loaded: putBlob(raw.loaded), reads: putBlob([...reads].sort()), unmapped: raw.unmapped,
+      ...(Array.isArray(raw.pkgs) && runnerBlob ? { pkgs: putBlob(raw.pkgs), runnerPkgs: runnerBlob } : {}),
       keys, consts: [...consts].sort(), durationMs: verdict.durationMs, recordedAt: new Date().toISOString(), host: c.host,
     });
     recorded++;
@@ -246,7 +252,7 @@ export function loadResults(run) {
 
 // ── decide: may this file's verdict be reused on tree H? ─────────────────────
 const _changes = new Map();
-export function clearChangeCache() { _changes.clear(); }
+export function clearChangeCache() { _changes.clear(); _depsBar.clear(); }
 function changesSince(C, H) {
   const ck = C + '..' + H + (REPLAY.drop ? ' -' + REPLAY.drop.source : '');
   if (_changes.has(ck)) return _changes.get(ck);
@@ -300,11 +306,47 @@ function changedKeys(C, H, ch) {
   return keys;
 }
 
-/** Is one footprint still valid on H? Returns null if valid, else the reason. */
-export function invalidates(ln, testFile, fp, H, nodeVersion, lock) {
+// Phase 3: what a lockfile change changed between two commits (cached per pair).
+const _lockDiffs = new Map();
+function lockDiffBetween(ln, C, H) {
+  const lf = lockfileOf(ln, (p) => showAt(H, p) !== null);
+  if (!lf) return null;
+  const k = `${lf}\0${C}\0${H}`;
+  if (!_lockDiffs.has(k)) {
+    const d = lockDiff(showAt(C, lf), showAt(H, lf));
+    _lockDiffs.set(k, d && { lockfile: lf, changed: new Set([...d.changed].map((x) => repoKey(lf, x))), native: d.native.map((x) => repoKey(lf, x)), versions: d.versions });
+  }
+  return _lockDiffs.get(k);
+}
+export function clearLockDiffCache() { _lockDiffs.clear(); }
+
+/**
+ * The dependency rule for one footprint whose lockfile hash differs (deps.mjs).
+ * Returns { reason } when the file must run, or { covered } (the lockfile path and
+ * any dependency-only package.json edits that the rule has accounted for).
+ */
+export function depsVerdict(ln, fp, H) {
+  if (ctx().deps.mode === 'off') return { reason: 'lockfile changed' };
+  if (!fp.pkgs || !fp.runnerPkgs) return { reason: 'lockfile changed' };
+  const d = lockDiffBetween(ln, fp.commit, H);
+  if (!d) return { reason: 'lockfile changed' };
+  if (d.native.length) return { reason: `lockfile changed: a package with native code (${d.native[0]})` };
+  let pkgs, runner; try { pkgs = new Set(getBlob(fp.pkgs)); runner = new Set(getBlob(fp.runnerPkgs)); } catch { return { reason: 'footprint blob missing' }; }
+  for (const k of d.changed) if (runner.has(k)) return { reason: `lockfile changed: ${k} (loaded by the vitest process)` };
+  for (const k of d.changed) if (pkgs.has(k)) return { reason: `lockfile changed: package ${k}` };
+  return { covered: d.lockfile };
+}
+
+/** Is one footprint still valid on H? Returns null if valid, else the reason. `info.deps` is set when the dependency rule alone made it valid. */
+export function invalidates(ln, testFile, fp, H, nodeVersion, lock, info = {}) {
   if (fp.v !== FP_VERSION) return 'footprint format changed';
   if (fp.node !== nodeVersion) return `node ${fp.node} → ${nodeVersion}`;
-  if (fp.lock !== lock && !REPLAY.ignoreLock) return 'lockfile changed';
+  let covered = null;
+  if (fp.lock !== lock && !REPLAY.ignoreLock) {
+    const dv = depsVerdict(ln, fp, H);
+    if (dv.reason) return dv.reason;
+    covered = dv.covered;
+  }
   const maxAge = ctx().maxAgeHours;
   const ageH = (nowMs() - Date.parse(fp.recordedAt)) / 3_600_000;
   if (!(ageH <= maxAge)) return `footprint older than ${maxAge} h (time-dependent tests)`;
@@ -320,7 +362,12 @@ export function invalidates(ln, testFile, fp, H, nodeVersion, lock) {
     // setup input: nothing loads it but itself, and if another test does load
     // it, the loaded-module check below still catches it. Treating it as global
     // made one edit to such a test re-run nearly a whole lane.
-    if (ln.global.test(p) && !isTestFile(p)) return `global input ${p}`;
+    // The dependency rule accounted for the lockfile, and for a package.json edit
+    // that only moves dependency fields; any other edit to either is still global.
+    // Only the GLOBAL rule is waived: a test that loaded or read the file itself
+    // (one that reads the lockfile as data, say) still runs below.
+    const waived = covered && (p === covered || (path.posix.basename(p) === 'package.json' && depsOnlyPackageJson(showAt(fp.commit, p), showAt(H, p))));
+    if (!waived && ln.global.test(p) && !isTestFile(p)) return `global input ${p}`;
     if (p === testFile) return 'the test file changed';
     if (loaded.has(p)) {
       const isSrc = p.startsWith(ln.srcPrefix) && isTsFile(p) && !isTestFile(p);
@@ -338,20 +385,33 @@ export function invalidates(ln, testFile, fp, H, nodeVersion, lock) {
     }
     for (const r of reads) if (r === p || p.startsWith(r + '/')) return `read input ${p}`;
   }
+  if (covered) info.deps = true;
   return null;
 }
+
+// The dependency rule's bar, read once per selection rather than once per file.
+const _depsBar = new Map();
+const depsBarOf = (l) => { if (!_depsBar.has(l)) _depsBar.set(l, depsBar(l)); return _depsBar.get(l); };
 
 /** May testFile's last green verdict be reused on tree H? */
 export function decide(testFile, H, nodeVersion, lock, laneName) {
   const ln = lane(laneName);
   const fps = fpsFor(ln.name, testFile);
   if (!fps.length) return { run: true, reason: 'no footprint' };
-  let first = null;
+  let first = null; let viaDeps = null;
   for (const fp of fps) {
-    const why = invalidates(ln, testFile, fp, H, nodeVersion, lock);
+    const info = {};
+    const why = invalidates(ln, testFile, fp, H, nodeVersion, lock, info);
+    if (!why && info.deps) {
+      // Valid only through the dependency rule: reuse it once that rule has met its
+      // own bar; until then it runs, and the run scores what it would have reused.
+      if (depsBarOf(ln.name).ok) return { run: false, deps: true, reason: `green at ${fp.commit.slice(0, 9)}; the lockfile changed, but no package it loaded did`, from: fp.commit, durationMs: fp.durationMs };
+      viaDeps ??= fp; continue;
+    }
     if (!why) return { run: false, reason: fp.commit === H ? 'green at this commit' : `green at ${fp.commit.slice(0, 9)}, nothing it depends on changed`, from: fp.commit, durationMs: fp.durationMs };
     first ??= why;
   }
+  if (viaDeps) return { run: true, depsWouldReuse: true, reason: 'lockfile changed (the dependency rule would reuse this; its bar is not met yet)' };
   return { run: true, reason: first };
 }
 
@@ -362,7 +422,13 @@ export function entryBar(laneName) {
   const obs = readTsv('shadow-').filter((r) => r.lane === ln.name && (r.mode === 'shadow' || r.mode === 'enforce'));
   // A miss triaged as a flake (`tracegate triage ... --verdict flake`) is a test
   // problem, not a footprint hole: it does not suspend enforcement. A `hole` does.
-  const flakes = new Set(readTsv('triage-').filter((t) => t.verdict === 'flake').map((t) => `${t.lane}\0${t.file}\0${t.head}`));
+  // The LATEST verdict for a (lane, file, head) decides. A Red Reader escalation
+  // (Phase 1b, `escalations-`) is a `hole` that comes after the runner's own
+  // recheck `flake`; a person who later says `flake` again overrides it.
+  const verdicts = [...readTsv('triage-'), ...(ctx().red.escalate ? readTsv('escalations-') : [])]
+    .filter((t) => t.verdict === 'flake' || t.verdict === 'hole').sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+  const last = new Map(); for (const t of verdicts) last.set(`${t.lane}\0${t.file}\0${t.head}`, t.verdict);
+  const flakes = new Set([...last].filter(([, v]) => v === 'flake').map(([k]) => k));
   const misses = readTsv('misses-').filter((r) => r.lane === ln.name && !flakes.has(`${r.lane}\0${r.file}\0${r.head}`));
   const now = Date.now(), day = 86_400_000;
   const first = obs.length ? Math.min(...obs.map((r) => Date.parse(r.at))) : now;
@@ -414,6 +480,7 @@ export function reasonKey(r) {
     .replace(/^executed function .* in (\S+)$/, 'executed code in $1')
     .replace(/^constant \S+ in (\S+)$/, 'constant in $1')
     .replace(/^footprint commit \S+ unavailable$/, 'footprint commit unavailable')
+    .replace(/^lockfile changed: package \S+$/, 'lockfile changed: a package it loaded')
     .replace(/^predictor error: [\s\S]*/, 'predictor error');
 }
 export const REASONS_TOP = 10;
@@ -424,6 +491,7 @@ export function select(o) {
   if (mode === 'shadow') { const d = modeDecision(ln.name); if (d.full) console.log(`tracegate (${ln.name}): running the FULL lane — ${d.why}.`); }
   const auditRate = o.audit === undefined ? entryBar(ln.name).auditRate : Number(o.audit);
   const H = head(); const lock = lockHash(ln.name);
+  _depsBar.clear();
   const files = allTestFiles(ln);
   const out = { lane: ln.name, mode, head: H, at: new Date().toISOString(), auditRate, decisions: {} };
   const selected = [];
@@ -482,6 +550,14 @@ export function report(o) {
   // Any file that failed here must run next time, whatever happens to ingest.
   for (const [f, r] of results) if (r.status === 'failed') dropFps(ln.name, f);
   for (const m of misses) appendTsv('misses-', MISSES_HEADER, [new Date().toISOString(), ln.name, pred.head.slice(0, 12), m, pred.decisions[m].reason]);
+  // Phase 3: score the dependency rule on every run it took part in.
+  const would = Object.entries(pred.decisions).filter(([, d]) => d.depsWouldReuse);
+  const viaDeps = Object.entries(pred.decisions).filter(([, d]) => d.deps && !d.run);
+  if (would.length || viaDeps.length) {
+    const failedOfThose = would.filter(([f]) => results.get(f)?.status === 'failed').length;
+    appendTsv('deps-', DEPS_HEADER, [new Date().toISOString(), ln.name, pred.mode, pred.head.slice(0, 12), '', would.length, viaDeps.length, failedOfThose, total]);
+    console.log(`tracegate (${ln.name}): dependency rule — ${viaDeps.length ? `reused ${viaDeps.length} verdict(s) across the lockfile change` : `would have reused ${would.length} of ${total} file(s) across the lockfile change; ${failedOfThose} of those failed`}.`);
+  }
   // A missed file must never be reused again on the footprint that lied.
   for (const m of misses) dropFps(ln.name, m);
   // The runner re-runs each miss alone before it exits (see run.mjs).

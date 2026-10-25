@@ -229,6 +229,35 @@ function sim(capacity) {
   const m = s.add({ class: 'measure', exclusive: true, observe: true }); const out = s.step();
   check('I10: an observed job never preempts anything', !out.preempts.length && s.state(d) === 'running' && s.state(m) === 'running', JSON.stringify(out));
 }
+// I11 — yield: an observed gate registered with `yield` keeps the daemon's old
+// "yield to any gate" rule, inside the broker, so the daemon's own check can go.
+{
+  const s = sim(8);
+  const d = s.add({ class: 'daemon', tokens: 2 }); s.step();
+  const g = s.add({ class: 'gate', tokens: 2, observe: true, yieldOthers: true }); const out = s.step();
+  check('I11: a running daemon is asked to yield to an observed gate with yield, even with room for both', out.preempts.includes(d) && s.state(g) === 'running', JSON.stringify(out));
+  s.end(d, 'preempted');
+  const d2 = s.add({ class: 'daemon', tokens: 1 }); s.step();
+  check('I11: a new daemon lease waits while that gate lives', s.state(d2) === 'queued' && /yields while/.test(explain(s.st, d2, s.now()).text), explain(s.st, d2, s.now()).text);
+  const a = s.add({ class: 'adhoc', tokens: 1 }); s.step();
+  check('I11: work that is not preemptible is not held', s.state(a) === 'running');
+  s.end(g); s.step();
+  check('I11: when the gate ends, the daemon starts', s.state(d2) === 'running');
+}
+{
+  const s = sim(8);
+  const d = s.add({ class: 'daemon', tokens: 2 }); s.step();
+  const g = s.add({ class: 'gate', tokens: 2, observe: true }); const out = s.step();
+  check('I11: without yield, an observed gate preempts nothing (I10 unchanged)', !out.preempts.length && s.state(d) === 'running' && s.state(g) === 'running', JSON.stringify(out));
+}
+{
+  const s = sim(8);
+  const m = s.add({ class: 'measure', tokens: 2 }); s.step();
+  const dep = s.add({ class: 'deploy', tokens: 2, observe: true, yieldOthers: true }); const out = s.step();
+  check('I11: yield never touches work that is not preemptible', !out.preempts.includes(m) && s.state(m) === 'running' && s.state(dep) === 'running', JSON.stringify(out));
+  const yl = s.add({ class: 'adhoc', tokens: 1, yieldOthers: true }); s.step();
+  check('I11: only an OBSERVED job can carry yield', s.st.jobs.get(yl).yieldOthers === false);
+}
 {
   const t0 = 1_000_000;
   const ev = [
@@ -302,6 +331,16 @@ try {
   const mCode = await new Promise((r) => m.on('exit', r));
   check('I6 live: the daemon\'s wrapper is preempted and exits 75 (EX_TEMPFAIL)', dCode === 75, String(dCode));
   check('I6 live: ...and the measurement then runs', mCode === 0 && mOut.includes('measured'), `${mCode} ${mOut}`);
+
+  // I11 live: `observe --yield` for a gate stops a running daemon lease (exit 75).
+  const d3 = lease(['--class', 'daemon', '--tokens', '1', '--', process.execPath, '-e', 'setInterval(()=>{},1000)']);
+  await sleep(600);
+  const gatePid = spawn(process.execPath, ['-e', 'setTimeout(()=>{},4000)'], { stdio: 'ignore' });
+  const ob = spawn(process.execPath, [CLI, 'observe', '--quiet', '--class', 'gate', '--yield', '--watch-pid', String(gatePid.pid)], { env, stdio: 'ignore' });
+  const d3Code = await Promise.race([new Promise((r) => d3.on('exit', r)), sleep(8000).then(() => 'still running')]);
+  check('I11 live: observe --yield makes a running daemon lease exit 75', d3Code === 75, String(d3Code));
+  if (d3Code !== 75) d3.kill('SIGKILL');
+  gatePid.kill('SIGKILL'); await new Promise((r) => ob.on('exit', r));
 
   // Deadline through the wrapper
   const hog = await raw(); hog.send({ op: 'request', class: 'gate', tokens: 2 }); await hog.wait((x) => x.type === 'granted');

@@ -22,6 +22,12 @@
 //       budgets say, so adopting the broker beside existing coordination changes
 //       nothing; the grant records whether it WOULD have waited, and behind whom.
 //       Its tokens count as used, so the broker's picture of the machine is true.
+//   I11 yield (Phase 0.5b P2): an observed job registered with `yield` still
+//       holds the floor against PREEMPTIBLE work across the priority gap: while
+//       it lives, such work is asked to yield and none starts. That is the rule
+//       the preemptible job's own script used to apply by itself ("yield to any
+//       gate"), so retiring that script-side check loses nothing. An observed job
+//       still never sheds, waits for or preempts work that is not preemptible.
 
 export const PREEMPT_GAP = 10;
 
@@ -64,7 +70,7 @@ export function apply(st, ev) {
       st.jobs.set(ev.id, {
         id: ev.id, owner: ev.owner ?? null, class: ev.class, label: ev.label ?? '', tokens: ev.tokens ?? 1,
         exclusive: !!ev.exclusive, est: ev.est ?? null, parent: ev.parent ?? null, deadline: ev.deadline ?? null,
-        minTokens: Number.isInteger(ev.minTokens) && ev.minTokens > 0 ? ev.minTokens : null, observe: !!ev.observe, wouldWait: null,
+        minTokens: Number.isInteger(ev.minTokens) && ev.minTokens > 0 ? ev.minTokens : null, observe: !!ev.observe, wouldWait: null, yieldOthers: !!ev.observe && !!ev.yieldOthers,
         memPerToken: Number.isFinite(ev.memPerToken) && ev.memPerToken > 0 ? ev.memPerToken : null, reservedMB: 0, contended: false,
         priority: ev.priority ?? cls.priority, preemptible: ev.preemptible ?? cls.preemptible,
         state: 'queued', enqueuedAt: ev.at, enqueueSeq: st.seq, rank: st.seq, grantedAt: null, fence: null,
@@ -180,9 +186,14 @@ export function schedule(st, now) {
     }
   }
   const ourWorkRunning = running.length > 0;
+  // I11: the highest observed job that asks preemptible work to yield, queued or running.
+  const floor = [...st.jobs.values()].filter((x) => x.yieldOthers && !x.nested).sort((a, b) => b.priority - a.priority)[0] ?? null;
+  const held = (j) => !!floor && !j.observe && j.preemptible && j.priority <= floor.priority - PREEMPT_GAP;
+  if (floor) for (const r of real) if (held(r) && !r.preemptRequested && !out.preempts.some((p) => p.id === r.id)) out.preempts.push({ id: r.id, by: floor.id });
 
   for (const j of queueOf(st)) {
     if (j.deadline !== null && now >= j.deadline) { out.expires.push(j.id); continue; }
+    if (held(j)) continue; // I11: waits, without a reservation, until the observed job ends
     // I2: a request made from inside a running lease runs inside it, at once.
     const parent = j.parent ? st.jobs.get(j.parent) : null;
     if (parent && parent.state === 'running') {
@@ -275,6 +286,11 @@ export function explain(st, id, now) {
   }
   const q = queueOf(st);
   const pos = q.findIndex((x) => x.id === id);
+  const yielder = [...st.jobs.values()].filter((x) => x.yieldOthers && !x.nested).sort((a, b) => b.priority - a.priority)[0];
+  if (yielder && j.preemptible && !j.observe && j.priority <= yielder.priority - PREEMPT_GAP) {
+    return { id, state: 'queued', position: pos + 1, of: q.length, ahead: [], blockers: [{ id: yielder.id, class: yielder.class, label: yielder.label, tokens: yielder.granted }], reservation: null,
+      text: `held: preemptible work yields while ${yielder.id} (${yielder.class}${yielder.label ? ` ${yielder.label}` : ''}) runs, and starts when it ends` };
+  }
   const s = schedule(st, now);
   const blockers = runningOf(st).filter((r) => !r.nested).map((r) => ({ id: r.id, class: r.class, label: r.label, tokens: r.granted }));
   const ahead = q.slice(0, pos).map((x) => ({ id: x.id, class: x.class, label: x.label, priority: x.priority }));
@@ -298,7 +314,7 @@ export function snapshot(st, now) {
   const view = (j) => ({ id: j.id, class: j.class, label: j.label, priority: j.priority, tokens: j.state === 'running' ? j.granted : j.tokens,
     exclusive: j.exclusive, preemptible: j.preemptible, state: j.state, fence: j.fence, nested: j.nested, parent: j.parent,
     minTokens: j.minTokens, memMB: j.state === 'running' ? j.reservedMB : null, memPerToken: memPerTokenOf(st, j), contended: j.contended,
-    observe: j.observe, wouldWait: j.wouldWait,
+    observe: j.observe, wouldWait: j.wouldWait, yieldOthers: j.yieldOthers,
     enqueuedAt: j.enqueuedAt, grantedAt: j.grantedAt, est: estimateOf(st, j) });
   const run = runningOf(st);
   return {

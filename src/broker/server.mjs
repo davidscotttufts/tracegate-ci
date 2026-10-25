@@ -196,7 +196,7 @@ export async function serve({ quiet = false } = {}) {
         emit({ type: 'enqueue', id, owner: c.owner, class: msg.class ?? 'adhoc', label: String(msg.label ?? '').slice(0, 200), tokens,
           ...(Number.isInteger(msg.minTokens) && msg.minTokens > 0 && msg.minTokens < tokens ? { minTokens: msg.minTokens } : {}),
           ...(Number.isFinite(msg.memPerToken) && msg.memPerToken > 0 ? { memPerToken: msg.memPerToken } : {}),
-          ...(msg.observe === true ? { observe: true } : {}),
+          ...(msg.observe === true ? { observe: true, ...(msg.yield === true ? { yieldOthers: true } : {}) } : {}),
           exclusive: !!msg.exclusive, est: Number.isFinite(msg.est) && msg.est > 0 ? msg.est : null, parent,
           deadline: Number.isFinite(msg.deadline) ? msg.deadline : null });
         ownerOf.set(id, s); c.jobs.add(id);

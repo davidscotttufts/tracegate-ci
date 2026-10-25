@@ -1,6 +1,6 @@
 {
   "name": "tracegate-ci",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Test-impact selection for Vitest from observed per-file footprints, and a local broker that gives every gate, daemon, measurement and AI agent on a machine one fair queue.",
   "license": "Apache-2.0",
   "type": "module",
@@ -12,7 +12,9 @@
     "./vitest-setup": "./src/vitest-setup.mjs",
     "./recorder": "./src/recorder.mjs",
     "./package.json": "./package.json",
-    "./broker": "./src/broker/core.mjs"
+    "./broker": "./src/broker/core.mjs",
+    "./sequencer": "./src/vitest-sequencer.mjs",
+    "./reporter": "./src/vitest-reporter.mjs"
   },
   "files": [
     "src/",
@@ -25,12 +27,15 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node test/selftest.mjs && node test/broker.mjs && node test/adaptive.mjs && node test/red.mjs",
+    "test": "node test/selftest.mjs && node test/broker.mjs && node test/adaptive.mjs && node test/red.mjs && node test/deps.mjs && node test/conductor.mjs && node test/jobserver.mjs",
     "test:sabotage": "node test/sabotage.mjs",
     "test:e2e": "bash examples/e2e.sh",
     "test:broker": "node test/broker.mjs",
     "test:adaptive": "node test/adaptive.mjs",
-    "test:red": "node test/red.mjs"
+    "test:red": "node test/red.mjs",
+    "test:deps": "node test/deps.mjs",
+    "test:conductor": "node test/conductor.mjs",
+    "test:jobserver": "node test/jobserver.mjs"
   },
   "peerDependencies": {
     "typescript": ">=5.0.0"

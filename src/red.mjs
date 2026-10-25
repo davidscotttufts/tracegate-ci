@@ -12,6 +12,11 @@
 //     miss a flake, lift a suspension, turn a red green or merge anything.
 //   - `escalate: true` is the only thing an opinion can do that a person sees
 //     first; `red list` sorts escalations to the top.
+//   - Phase 1b, the one effect an opinion can have, and only in the strict
+//     direction: an escalated `real` opinion on a MISS (confidence ≥
+//     red.escalateMinConfidence) writes an `escalations-` row, which the entry
+//     bar reads as `hole`. That can SUSPEND enforcement (run more), never lift it
+//     (run less). A person's later `triage --verdict flake` still has the last word.
 //   - `red score` compares opinions with the triage a person later recorded, so
 //     the reader's accuracy is measured before anyone leans on it.
 //
@@ -24,7 +29,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ctx, git } from './config.mjs';
-import { appendTsv, ledgerDir, readTsv } from './ledger.mjs';
+import { appendTsv, ledgerDir, readTsv, ESCALATIONS_HEADER } from './ledger.mjs';
 
 export const RED_HEADER = ['at', 'id', 'lane', 'head', 'failed', 'misses'];
 export const VERDICTS = Object.freeze(['real', 'flake-suspect', 'infra', 'unclear']);
@@ -143,7 +148,21 @@ export function annotate(o) {
     verdict: o.verdict, escalate: o.escalate, confidence: o.confidence, reasons: o.reasons, files: o.files ?? packet.failed.map((f) => f.file), owner: o.owner ?? null };
   fs.mkdirSync(ledgerDir(), { recursive: true });
   fs.appendFileSync(opinionsFile(), JSON.stringify(rec) + '\n');
+  rec.escalated = escalate(rec, packet);
   return rec;
+}
+
+/**
+ * Phase 1b: the stricter verdict wins. Only an escalated `real` opinion, at or
+ * above the configured confidence, and only for files that were a MISS in the
+ * packet, is recorded, as `hole`. Returns the files it escalated.
+ */
+function escalate(rec, packet) {
+  const cfg = ctx().red;
+  if (!cfg.escalate || rec.verdict !== 'real' || rec.escalate !== true || !(rec.confidence >= cfg.escalateMinConfidence)) return [];
+  const files = rec.files.filter((f) => packet.failed.some((x) => x.file === f && x.miss));
+  for (const f of files) appendTsv('escalations-', ESCALATIONS_HEADER, [rec.at, packet.lane, f, packet.head.slice(0, 12), 'hole', rec.by, packet.id, rec.confidence]);
+  return files;
 }
 
 /**
@@ -153,7 +172,13 @@ export function annotate(o) {
  */
 export function score() {
   const triage = readTsv('triage-');
-  const out = { opinions: 0, scored: 0, agree: 0, disagree: [], unscored: 0, escalations: 0 };
+  const out = { opinions: 0, scored: 0, agree: 0, disagree: [], unscored: 0, escalations: 0, raised: 0, overridden: 0 };
+  // Phase 1b: how many escalations raised a miss to `hole`, and how many a person
+  // later overrode with `flake` (each override is a false escalation).
+  for (const e of readTsv('escalations-')) {
+    out.raised++;
+    if (triage.some((t) => t.lane === e.lane && t.file === e.file && t.head === e.head && t.verdict === 'flake' && t.at > e.at)) out.overridden++;
+  }
   for (const o of opinions()) {
     out.opinions++; if (o.escalate) out.escalations++;
     const truth = o.files.map((f) => triage.filter((t) => t.file === f && o.head.startsWith(t.head)).pop()).filter(Boolean);
@@ -173,6 +198,7 @@ export function red(sub, o) {
     const rec = annotate({ id: o._id, verdict: o.verdict, escalate: o.escalate === true || o.escalate === 'true' ? true : o.escalate === 'false' ? false : o.escalate,
       confidence: Number(o.confidence), reasons: o.reasons, ...(o.owner ? { owner: o.owner } : {}), by: o.by ?? 'cli' });
     console.log(`tracegate red: opinion on ${rec.id}: ${rec.verdict}${rec.escalate ? ' (ESCALATED)' : ''}`);
+    if (rec.escalated.length) console.log(`tracegate red: raised to HOLE (enforcement suspends for the lane until a person triages it): ${rec.escalated.join(', ')}`);
     return;
   }
   if (sub === 'score') { console.log(JSON.stringify(score(), null, 2)); return; }

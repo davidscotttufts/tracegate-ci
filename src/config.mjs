@@ -14,6 +14,9 @@
 //   TRACEGATE_MAX_AGE_HOURS footprint age limit (default 72)
 //   TRACEGATE_INGEST_BUDGET_S  ingest time budget in seconds (default 300)
 //   TRACEGATE_TEST_LIST     newline-separated test files (skips `vitest list`)
+//   TRACEGATE_RED_ESCALATE  on|off: may a Red Reader escalation raise a flake to a hole (default on)
+//   TRACEGATE_DEPS          off|shadow|auto: the dependency rule for lockfile changes (default auto)
+//   TRACEGATE_CONDUCTOR     off|shadow|order: fail-first ordering (default shadow)
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -49,6 +52,16 @@ export const DEFAULTS = Object.freeze({
   keepPerTest: 6,
   // Ingest stops recording after this many seconds; the rest simply run next time.
   ingestBudgetSeconds: 300,
+  // Phase 1b: an escalated `real` opinion on a MISS, at or above this confidence,
+  // raises the runner's `flake` to `hole` (the stricter verdict wins; a person's
+  // later triage still has the last word).
+  red: { escalate: true, escalateMinConfidence: 0.7 },
+  // Phase 3: on a lockfile change, a test whose footprint loaded no changed
+  // package keeps its verdict. `auto` enforces that only after `bar` lockfile runs
+  // scored it with no failure among the files it would have reused.
+  deps: { mode: 'auto', bar: { runs: 3, days: 1 } },
+  // Phase 2: fail-first ordering. `shadow` scores it; `order` hands vitest the order.
+  conductor: { mode: 'shadow' },
 });
 
 // Inputs every test in a lane depends on. A change to any of them runs the whole
@@ -136,6 +149,9 @@ export function ctx() {
     host: (process.env.TRACEGATE_HOST || os.hostname().split('.')[0] || 'host').replace(/[^A-Za-z0-9_-]/g, '_'),
     sync: cfg.sync ?? null,
     broker: cfg.broker ?? null, // the broker reads it (src/broker/paths.mjs)
+    red: { ...DEFAULTS.red, ...(cfg.red ?? {}), ...(process.env.TRACEGATE_RED_ESCALATE ? { escalate: process.env.TRACEGATE_RED_ESCALATE !== 'off' } : {}) },
+    deps: { ...DEFAULTS.deps, ...(cfg.deps ?? {}), bar: { ...DEFAULTS.deps.bar, ...(cfg.deps?.bar ?? {}) }, ...(process.env.TRACEGATE_DEPS ? { mode: process.env.TRACEGATE_DEPS } : {}) },
+    conductor: { ...DEFAULTS.conductor, ...(cfg.conductor ?? {}), ...(process.env.TRACEGATE_CONDUCTOR ? { mode: process.env.TRACEGATE_CONDUCTOR } : {}) },
   };
   return _ctx;
 }

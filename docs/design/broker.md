@@ -194,7 +194,8 @@ is granted the widest width in `[minTokens, need]` that fits.
 | 0.5b | Adopt in the source project: gate, train, daemon, measurements and deploys all wrap in `tracegate lease`; the eight mechanisms retire one by one | Two weeks with no coordination incident |
 | 0.5b-1 | **Observe first (I10, done in v0.4.0):** each existing script starts `tracegate observe --class … --watch-pid $$ &` beside its current locks; the broker grants at once and records what it would have done; `tracegate observed` reports would-have-waited grants, behind whom, and minutes over budget | A week of observe data compared with what the eight mechanisms did; then retire one mechanism at a time, with the owner's decision |
 | 0.6 | Adaptive capacity (§9): cpu and memory budgets from live machine samples, elastic grants, learned memory per job, shedding of preemptible work, a starvation guard; hardware-relative defaults | Tests for I9 and the parsers on fixtures from two page sizes; rules sabotage-witnessed (done, v0.3.0) |
-| 0.5c | A make-compatible jobserver FIFO exported per lease, for Ninja, Cargo and GCC children | Measured under a mixed workload |
+| 0.5b-2 | **Yield (I11, done in v0.5.0):** `observe --yield` lets an observed gate hold the floor against preemptible leases across the priority gap: running ones are asked to yield, new ones wait while it lives. The background job runs under a real `lease --class daemon` and its own "stop when a gate starts" polling can retire | Live-tested (a daemon lease exits 75 when a yielding gate registers); rules sabotage-witnessed |
+| 0.5c | A make-compatible jobserver FIFO exported per lease (`lease --jobserver`, done in v0.5.0), for make 4.4+, Ninja 1.13+, cargo and rustc children | The FIFO protocol is tested through a real lease. **Not yet measured under a mixed workload**: the build machine has only GNU make 3.81, which predates the fifo form; the real-make check runs where make ≥ 4.4 is installed |
 | 2 | Conductor (ROADMAP Phase 2) as an advisor: fail-first and risk-aware composition | Shadow-scored |
 | 3+ | **Footprint-partitioned trains:** PRs with disjoint Tracegate footprints go into independent sub-queues, with a Zuul-style adaptive window and Trunk-style optimistic merging for flakes | False-independence rate measured before anything relies on it |
 
@@ -305,7 +306,7 @@ before trusting it.
 - [ ] **Performance vs efficiency cores.** `perfCores` is reported, but tokens count
       all cores alike. Measure whether a Vitest worker on an efficiency core
       lengthens the critical path enough to matter.
-- [ ] **A jobserver for tools that fork** (0.5c), so the granted width also reaches
-      compilers that do not read `VITEST_MAX_WORKERS`.
+- [x] **A jobserver for tools that fork** (0.5c, v0.5.0): `lease --jobserver`. The
+      mixed-workload measurement is still open (see §7).
 - [ ] **Batch re-sizing.** A lane split into batches could be re-leased between batches
       and so follow the budget during a run, not just at its start.

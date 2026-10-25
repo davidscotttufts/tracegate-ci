@@ -24,18 +24,27 @@ const USAGE = `usage: tracegate <command> [options]
                      --confidence 0..1 --reasons "…"
                                        Red Reader: packets for red runs, and escalate-only
                                        opinions on them (an agent writes these over MCP)
+  deps    list | show <id> | score | bar [--lane l]
+          | annotate <id> --affected all|none|<file,file…> --confidence 0..1 --reasons "…"
+                                       dependency rule (Phase 3) and its oracle in shadow:
+                                       packets for lockfile runs, predictions scored vs the full run
+  conductor train --lane <l> --pr <id>=<ref> … [--base ref]
+          | outcome --id <advice> [--red a,b] [--combination] | score
+                                       fail-first order score, and train-composition advice
   status                               ledger, entry bar and mode per lane
   sync    [--remote <[user@]host:/abs/ledger>]
 
 Broker (one queue for the machine's CI work; see docs/design/broker.md):
   lease   [--class c] [--tokens n] [--min-tokens m] [--mem-per-token MB] [--exclusive]
-          [--est seconds] [--label l] [--deadline-min m] [--requeue] [--quiet] -- <command…>
+          [--est seconds] [--label l] [--deadline-min m] [--requeue] [--jobserver] [--quiet] -- <command…>
                                        run a command when the broker grants capacity;
-                                       --min-tokens makes it elastic (granted m..n workers)
-  observe --class c [--tokens n] [--label l] [--exclusive] --watch-pid P [--quiet]
+                                       --min-tokens makes it elastic (granted m..n workers);
+                                       --jobserver exports a make jobserver with the grant
+  observe --class c [--tokens n] [--label l] [--exclusive] [--yield] --watch-pid P [--quiet]
                                        register work coordinated elsewhere, never waiting;
                                        the broker records whether it WOULD have waited
-                                       (adopt the broker beside existing locks, then compare)
+                                       (adopt the broker beside existing locks, then compare);
+                                       --yield: preemptible leases still yield to it (I11)
   observed [--json] [--hours h]        what observe recorded: would-have-waited grants,
                                        behind whom, and time over capacity
   machine [--json]                     this host's hardware, the latest load/memory sample,
@@ -98,6 +107,8 @@ try {
   else if (cmd === 'full-done') fullDone(o);
   else if (cmd === 'replay') replay(o);
   else if (cmd === 'red') { const id = process.argv[4] && !process.argv[4].startsWith('--') ? process.argv[4] : undefined; (await import('./red.mjs')).red(process.argv[3], { ...o, _id: id }); }
+  else if (cmd === 'deps') { const id = process.argv[4] && !process.argv[4].startsWith('--') ? process.argv[4] : undefined; (await import('./deps.mjs')).deps(process.argv[3], { ...o, _id: id }); }
+  else if (cmd === 'conductor') (await import('./conductor.mjs')).conductor(process.argv[3], o);
   else if (cmd === 'run') process.exitCode = runLane(o, rest);
   else if (cmd === 'lease') process.exitCode = await (await import('./broker/client.mjs')).lease(o, rest);
   else if (cmd === 'observe') process.exitCode = await (await import('./broker/client.mjs')).observe(o);

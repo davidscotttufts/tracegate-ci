@@ -7,6 +7,9 @@
 //   triage-<host>.tsv   one row per triage verdict
 //   reasons-<host>.tsv  one row per select: why files had to run
 //   full-<host>.tsv     one row per complete full run (the backstop reads these)
+//   escalations-<host>.tsv  one row per Red Reader escalation of a MISS (Phase 1b)
+//   deps-<host>.tsv     one row per lockfile run: what the dependency rule would reuse, and how it went
+//   conductor-<host>.tsv  one row per red run: where fail-first put the first failure
 //
 // It is a CACHE plus a LOG. Deleting `fp/` and `blobs/` is always safe and only
 // costs predictions. The .tsv logs are the evidence; never delete them. Logs are
@@ -83,3 +86,6 @@ export const MISSES_HEADER = ['at', 'lane', 'head', 'file', 'reason'];
 export const TRIAGE_HEADER = ['at', 'lane', 'file', 'head', 'verdict'];
 export const REASONS_HEADER = ['at', 'lane', 'mode', 'head', 'files', 'must_run', 'top'];
 export const FULL_HEADER = ['at', 'lane', 'head'];
+export const ESCALATIONS_HEADER = ['at', 'lane', 'file', 'head', 'verdict', 'by', 'packet', 'confidence'];
+export const DEPS_HEADER = ['at', 'lane', 'mode', 'head', 'changed', 'would_reuse', 'reused', 'failed_of_those', 'files'];
+export const CONDUCTOR_HEADER = ['at', 'lane', 'head', 'files', 'failed', 'first_fail_rank', 'random_expected', 'mode'];
