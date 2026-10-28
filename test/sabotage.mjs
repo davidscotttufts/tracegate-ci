@@ -265,6 +265,12 @@ const WITNESSES = [
   ['observe-never-sheds-real-work', 'src/broker/core.mjs',
     'const real = running.filter((r) => !r.observe);', 'const real = running;',
     'I10: an observed job never preempts anything', 'broker.mjs'],
+  ['added-import-always-runs', 'src/predictor.mjs',
+    "if (k.startsWith('<import:')) return", "if (k.startsWith('<import:')) continue; if (false) return",
+    'RUN  pure insertion retargets an executed import binding'],
+  ['removed-import-always-runs', 'src/predictor.mjs',
+    "if (k.startsWith('<import-old:')) return", "if (false) return",
+    'RUN  value import of an already-loaded module removed'],
 ];
 
 // A broken rule can make a check wait forever, and a test blocked in spawnSync

@@ -12,6 +12,7 @@
 // is part of the scenarios and would read like a real miss in a CI log. Set
 // TRACEGATE_SELFTEST_VERBOSE=1 to see it.
 import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -39,7 +40,7 @@ export const TABLE = ['alpha', 'beta'];
 export const OTHER = { unused: true };
 
 export function foo(): number {
-  return TABLE.length + helper();
+  return TABLE.length + helper() + parseInt('0', 10);
 }
 
 export function bar(): number {
@@ -64,7 +65,7 @@ w('tracegate.config.json', JSON.stringify({
   },
 }, null, 2));
 w(SRC, base);
-const bBase = "export function helper(): number { return USED.size; }\nexport const USED = new Set(['x']);\nexport const IDLE = new Set(['y']);\n";
+const bBase = "export function helper(): number { return USED.size; }\nexport const USED = new Set(['x']);\nexport const IDLE = new Set(['y']);\nexport function wrongHelper(): number { return 2; }\nexport function parseInt(_text: string, _radix?: number): number { return 100; }\n";
 w(BSRC, bBase);
 w(TEST, "import { foo } from '../src/a';\nfoo();\n");
 w('packages/api/package-lock.json', '{"lockfileVersion":3}\n');
@@ -103,6 +104,23 @@ const commit = (msg) => { g('add', '-A'); gc('commit', '-qm', msg); return tg.he
 // One recorded run: foo, the /hit handler, baz and b.helper executed; bar and /cold did not.
 recordAt(execAt(base));
 
+// The two binding cases below are also EXECUTED, so the evidence that behaviour
+// changed is not just a fabricated footprint: foo() is 3 at base.
+const ts = createRequire(import.meta.url)('typescript');
+const executeFoo = (source) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tracegate-binding-'));
+  try {
+    for (const [name, text] of [['a', source.replaceAll("'./b'", "'./b.cjs'")], ['b', bBase]]) {
+      fs.writeFileSync(path.join(dir, `${name}.cjs`), ts.transpileModule(text, {
+        compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+      }).outputText);
+    }
+    return Number(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(require(process.argv[1]).foo()))', path.join(dir, 'a.cjs')], { encoding: 'utf8' }));
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+};
+const baselineValue = executeFoo(base);
+check('binding witness baseline executes to 3', baselineValue === 3, `got ${baselineValue}`);
+
 // ── decide(): one commit per kind of change ──────────────────────────────────
 const cases = [
   ['body of a function the test never ran', 'skip', () => w(SRC, base.replace('return 42;', 'return 43;'))],
@@ -110,6 +128,21 @@ const cases = [
   ['constant the test never references', 'skip', () => w(SRC, base.replace('unused: true', 'unused: false'))],
   ['interface (erased by the transform)', 'skip', () => w(SRC, base.replace('id: string', 'id: number'))],
   ['import line only', 'skip', () => w(SRC, base.replace("import { helper } from './b';", "import { helper } from './b';\nimport type { Thing } from './c';"))],
+  // A value import pulls a module graph into load, which can reorder
+  // vi.mock(importOriginal) resolution (openwop-app #5360), or rebind a name an
+  // executed function uses. Loaded membership cannot prove either neutral, so
+  // every added, removed or edited value import runs. Type-only stays neutral.
+  ['value import of a module the test never loaded', 'run', () => w(SRC, base.replace("import { helper } from './b';", "import { helper } from './b';\nimport { toModelToolResult } from './c.js';"))],
+  ['value re-export of a module the test never loaded', 'run', () => w(SRC, base + "export { toModelToolResult } from './c';\n")],
+  ['value import of a module the test already loaded', 'run', () => w(SRC, base.replace("import { helper } from './b';", "import { helper } from './b';\nimport { USED } from './b.js';"))],
+  // Both stay valid programs and leave foo's text alone. The first is
+  // insertion-only (its old character span is empty); the second adds a binding
+  // over a global foo uses. b.ts was already loaded in the recorded run.
+  ['pure insertion retargets an executed import binding', 'run', () => w(SRC, base.replace('import { helper }', 'import { wrongHelper as helper }')), 4],
+  ['new import shadows a global used by an executed function', 'run', () => w(SRC, "import { parseInt } from './b';\n" + base), 103],
+  ['value import of an already-loaded module removed', 'run', () => w(SRC, base.replace("import { helper } from './b';\n", ''))],
+  ['value import specifier edited between two loaded modules', 'run', () => w(SRC, base.replace("from './b';", "from './a';"))],
+  ['type-only declaration removed', 'skip', () => w(SRC, base.replace('export type Id = string;\n', ''))],
   ['a repo file the test never read', 'skip', () => w('data/unread.json', '{"y":2}\n')],
   ['body of a function the test ran', 'run', () => w(SRC, base.replace('TABLE.length + helper()', 'TABLE.length + helper() + 1'))],
   ['handler the test hit', 'run', () => w(SRC, base.replace('() => foo());', '() => foo() * 2);'))],
@@ -124,7 +157,9 @@ const cases = [
   ['Set member of a constant the test never references', 'skip', () => w(BSRC, bBase.replace("'y'", "'z'"))],
   ['Set member of a constant an executed function reads', 'run', () => w(BSRC, bBase.replace("'x'", "'w'"))],
   ['a new empty Map cache nothing names yet', 'skip', () => w(SRC, base + 'const cache = new Map<string, number>();\n')],
-  ['a Set built by a LOCALLY bound constructor', 'run', () => w(BSRC, "import { Set } from './c';\n" + bBase.replace("'y'", "'z'"))],
+  // The local binding is a parameter of a function the test never runs, not an
+  // import: a value import now runs on its own, which would hide this rule.
+  ['a Set built by a LOCALLY bound constructor', 'run', () => w(BSRC, bBase.replace("'y'", "'z'") + 'export function shadow(Set: unknown): unknown { return Set; }\n')],
   ['a loaded source module deleted', 'run', () => fs.rmSync(path.join(repo, BSRC))],
   ['a repo file the test read', 'run', () => w('data/read.json', '{"x":2}\n')],
   ['the test file itself', 'run', () => w(TEST, "import { foo } from '../src/a';\nfoo();\nfoo();\n")],
@@ -135,10 +170,14 @@ const cases = [
   ['another lane\'s vitest config', 'skip', () => w('packages/web/vitest.config.ts', 'export default {};\n')],
   ['the lockfile (global input)', 'run', () => w('packages/api/package-lock.json', '{"lockfileVersion":3,"x":1}\n')],
 ];
-for (const [name, want, mutate] of cases) {
+for (const [name, want, mutate, expectedValue] of cases) {
   g('checkout', '-q', C1, '--', '.');
   g('checkout', '-q', '--detach', C1);
   mutate();
+  if (expectedValue !== undefined) {
+    const actual = executeFoo(fs.readFileSync(path.join(repo, SRC), 'utf8'));
+    check(`executed binding witness: ${name} (${baselineValue} -> ${expectedValue})`, actual === expectedValue && actual !== baselineValue, `got ${actual}`);
+  }
   commit(name);
   const d = decideApi();
   const got = d.run ? 'run' : 'skip';

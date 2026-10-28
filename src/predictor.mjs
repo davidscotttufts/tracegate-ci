@@ -298,7 +298,10 @@ function changedKeys(C, H, ch) {
       }
       // Each side contributes only the characters it actually has: an insertion is
       // described by the new side, a deletion by the old side, an edit by both.
-      if (pre && i < oldN && r1 > r0) for (const k of pre.keysAt(oldStart + i, r0, r1)) keys.add(k);
+      // An old-side value import is tagged <import-old:SPEC>: dropping or editing
+      // it can stop a side-effect module evaluating or reorder vi.mock, so it
+      // always invalidates, even when SPEC was loaded.
+      if (pre && i < oldN && r1 > r0) for (const k of pre.keysAt(oldStart + i, r0, r1)) keys.add(k.startsWith('<import:') ? `<import-old:${k.slice(8)}` : k);
       if (post && i < newN && a1 > a0) for (const k of post.keysAt(newStart + i, a0, a1)) keys.add(k);
     }
   }
@@ -377,6 +380,8 @@ export function invalidates(ln, testFile, fp, H, nodeVersion, lock, info = {}) {
       const exec = fp.keys[p] ?? [];
       for (const k of changedKeys(fp.commit, H, c)) {
         if (k === '<blank>' || k === '<import>') continue;
+        if (k.startsWith('<import-old:')) return `import ${k.slice(12, -1)} removed or changed in ${p}`;
+        if (k.startsWith('<import:')) return `value import ${k.slice(8, -1)} added or changed in ${p}`;
         if (k === '<top>') return `top-level change in ${p}`;
         if (k.startsWith('<const:')) { if (consts.has(`${p}::${k.slice(7, -1)}`)) return `constant ${k.slice(7, -1)} in ${p}`; continue; }
         if (exec.includes(k)) return `executed function ${k} in ${p}`;
