@@ -6,8 +6,11 @@
 //     an anonymous callback by its callee and first string argument
 //     (`router.get(/x)`), so one route handler is one key and editing it does
 //     not invalidate every test that ran the code which registered it;
-//   - imports, interfaces and type aliases are `<import>`: erased by the
-//     transform, never an input;
+//   - type-only imports, interfaces and type aliases are `<import>`: erased by
+//     the transform, never an input;
+//   - a value import or re-export is `<import:SPEC>`, always an input: it can
+//     pull a module graph into load, reorder vi.mock resolution, or rebind a
+//     name an executed function uses without touching that function's text;
 //   - a top-level `const X = <literal|object|array|arrow|new Set(...)>` is
 //     `<const:X>`: an input only for tests whose code names X;
 //   - any other top-level statement is `<top>`: an input to every test that
@@ -105,7 +108,10 @@ export function model(src, file) {
     const erased = (ts.isImportDeclaration(st) && st.importClause) || (ts.isExportDeclaration(st) && st.moduleSpecifier) ||
       ts.isInterfaceDeclaration(st) || ts.isTypeAliasDeclaration(st);
     let cls = '<top>';
-    if (erased) cls = '<import>';
+    if (erased) {
+      const typeOnly = !st.moduleSpecifier || (ts.isImportDeclaration(st) ? st.importClause.isTypeOnly : st.isTypeOnly);
+      cls = typeOnly ? '<import>' : `<import:${st.moduleSpecifier.text}>`;
+    }
     else if (ts.isVariableStatement(st)) {
       const d = st.declarationList.declarations;
       if (d.length === 1 && ts.isIdentifier(d[0].name) && d[0].initializer && isPureInit(d[0].initializer, sf)) {
