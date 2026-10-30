@@ -17,6 +17,8 @@ const repo = path.join(tmp, 'repo'); const ledger = path.join(tmp, 'ledger'); co
 fs.mkdirSync(repo);
 for (const k of Object.keys(process.env)) if (k.startsWith('TRACEGATE')) delete process.env[k];
 Object.assign(process.env, { TRACEGATE_ROOT: repo, TRACEGATE_LEDGER: ledger, TRACEGATE_HOST: 'train' });
+// The gates below make commits of their own (git commit-tree); CI machines have no git identity.
+Object.assign(process.env, { GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' });
 const g = (...a) => execFileSync('git', ['-C', repo, '-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 const w = (rel, text) => { fs.mkdirSync(path.dirname(path.join(repo, rel)), { recursive: true }); fs.writeFileSync(path.join(repo, rel), text); };
 // The gate: red when any tracked file says BAD; on green, log the tree it saw.
