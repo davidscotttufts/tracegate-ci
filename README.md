@@ -90,6 +90,7 @@ npx tracegate init              # proposes one lane per Vitest project; prints, 
 npx tracegate init --write --mcp
 npx tracegate doctor --canary   # Node, Vitest, typescript, recorder, ledger, and one recorded file
 npx tracegate run               # shadow at first: everything runs; status shows the countdown
+npx tracegate savings           # what reuse would have saved so far, from the first run on
 ```
 
 `init --write` does three things:
@@ -218,6 +219,8 @@ npx tracegate ingest --lane api --run "$RUN" --expect-head "$HEAD0"
 
 ```sh
 npx tracegate status                                         # ledger, entry bar and mode per lane
+npx tracegate savings [--lane api] [--json]                  # reusable file runs and test time so far
+npx tracegate report-card [--json] [--out docs/evidence/card.md]  # miss rates with 95% intervals
 npx tracegate mode --lane api                                # off | shadow | enforce
 npx tracegate triage --lane api --file packages/api/test/x.test.ts --verdict flake|hole [--head <sha12>]
 npx tracegate replay --lane api --head <commit> --at <iso time> [--drop <regex>] [--ignore-lock] [--out r.json]
@@ -228,6 +231,16 @@ npx tracegate sync --remote user@host:/abs/path/.git/tracegate
 - **triage**: `hole` = a real footprint gap (fix the recorder); `flake` = the test fails on
   its own. Only `flake` lifts the suspension. Passing when re-run alone is not proof of a
   flake: read the failure. A wrong argument whose assertion depends on timing passes alone.
+- **savings** reads the shadow log, so it has numbers from the first recorded run, long
+  before the entry bar lets a lane skip anything. A file that was reusable and then failed
+  (a MISS) never counts as a saving. The projection keeps the audit sample.
+- **report-card** publishes Tracegate's own error rates per lane, from the append-only logs:
+  misses per checked verdict and per run with 95% Wilson intervals, each miss's triage, the
+  longest a hole could have gone undetected (time since the last full run before it), audit
+  cost, and the Red Reader and Conductor scores. See [docs/evidence/](docs/evidence/).
+- **Why not Vitest `recordDependencies`?** [docs/compare/vitest-record-dependencies.md](docs/compare/vitest-record-dependencies.md)
+  runs both on the same commits. In short: Tracegate selects by function, sees files read
+  at run time, and audits its own skips; neither sees what a child process reads.
 - **replay** re-decides a past run offline, as of its clock and with only the footprints
   recorded before it, optionally with causes removed. It answers "what would this run have
   executed if this change had not been in it?". It is read-only on the ledger.
@@ -456,6 +469,66 @@ trains. Score the advice with `outcome`:
 - a pair called independent that was red only in combination is a false independence.
   That rate must be measured before anything relies on partitioning.
 
+## Merge train
+
+`tracegate train` lands a queue of branches onto a target branch (default `main`):
+
+```sh
+tracegate train add --pr 12=origin/pr-12        # pinned to the commit the ref names now
+tracegate train add --pr 13=origin/pr-13
+tracegate train run --lane api                  # gate, bisect, land; --push to push after
+tracegate train status
+```
+
+1. The Conductor's advice decides which PRs go alone. The rest form one batch.
+2. Each batch is built as a real merge commit (one `--no-ff` merge per PR) on the
+   target's current commit, in a throwaway worktree. A PR that does not merge cleanly is
+   rejected as a conflict.
+3. The gate runs in that worktree under a broker lease of class `train`. The default gate
+   is `tracegate run`, so selection applies and the worktree shares the ledger. Use
+   `--gate "<cmd>"` for another command.
+4. **Green:** the target moves to the gated commit by compare-and-swap. If the target
+   moved meanwhile, nothing lands and the queue is kept. A target checked out with local
+   changes is never touched.
+5. **Red:** the batch is split in halves. The first half is gated, then the second on top
+   of whatever landed, down to the single red PR, which is rejected. Each half reuses the
+   verdicts the split did not change, and a train ends after at most 2n − 1 gates.
+6. Which PRs were red is fed to `conductor outcome`, so `conductor score` measures the
+   advice.
+
+The target only ever points at a commit whose exact tree was gated green. Nothing is
+pushed unless you pass `--push`.
+
+## Silence guard
+
+A change that makes the suite test less should not pass as green. On every
+`tracegate run`, the guard diffs the lane's test files against the merge base with
+`main`, so it covers the whole branch, and reports **net additions** of:
+- `.skip`, `.todo`, `.skipIf`, `.runIf`, `xit`, `xtest` and `xdescribe`;
+- `.only`;
+- `if (false)`;
+- removed `it(` / `test(` calls;
+- deleted test files.
+
+A skip that was already there is never reported.
+
+```json
+{ "silence": { "mode": "shadow", "base": "main" } }
+```
+
+- **`shadow`** (the default) prints and logs findings (`silenced-<host>.tsv`), and puts
+  them in the red packet.
+- **`enforce`** makes the run red until a person allows each finding:
+  `tracegate silence allow --file <f> --by <name>`. The allow holds for that version of
+  the file only.
+- **`off`** does nothing.
+
+Nothing an agent can call lifts the guard. There is no MCP tool for it, a Red Reader
+opinion does not affect it, and the Claude Code plugin's hook blocks agents from
+running `tracegate silence allow` and `tracegate triage`. `tracegate silence check`
+lists findings. [docs/recipes/edit-guards.md](docs/recipes/edit-guards.md) shows how it
+pairs with edit-level guards.
+
 ## Dependency changes
 
 Footprints record which installed packages each test file's worker loaded, and the
@@ -512,10 +585,11 @@ Any change to an unmapped module means "run", so predictions stay safe but get c
 
 ```sh
 npm install                 # typescript, for parsing
-npm test                    # self-test, broker, adaptive capacity, Red Reader, dependency rule, Conductor, jobserver, onboarding
+npm test                    # self-test, broker, adaptive capacity, Red Reader, dependency rule, Conductor, jobserver, onboarding, evidence, train, silence guard
 node test/sabotage.mjs      # breaks each rule in a temp copy; each must turn the self-test red
 bash examples/e2e.sh        # end-to-end on examples/sample-repo (needs network for npm install)
 npm run test:vitest-matrix  # the end-to-end once per supported Vitest version, seam strictly mapped
+npm run test:compare        # Tracegate vs Vitest recordDependencies, every selection asserted
 ```
 
 The self-test asserts both directions on purpose: a predictor that always says "run" fails

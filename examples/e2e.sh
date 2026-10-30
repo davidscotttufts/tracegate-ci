@@ -87,4 +87,16 @@ expect_selection 'an edit to a data file' test/rates.test.ts
 
 echo; echo "== status"
 $TGX status
+
+echo; echo "== savings and the report card, from the two recorded runs"
+$TGX savings
+$TGX savings --json > "$WORK/.savings.json"
+$TGX report-card --json --out "$WORK/.card.json" > /dev/null
+node -e '
+  const [s] = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  const c = JSON.parse(require("fs").readFileSync(process.argv[2], "utf8")).lanes[0];
+  const ok = s.runs === 2 && s.timedRuns === 2 && s.reusableFiles === 4 && s.misses === 0
+    && c.observations.runs === 2 && c.observations.enforce === 1 && c.misses.missed === 0;
+  console.log(`   ${ok ? "✓" : "✗"} savings: ${s.reusableFiles} of ${s.files} file runs reusable over ${s.runs} runs; card: ${c.observations.runs} runs, ${c.misses.missed} misses`);
+  process.exit(ok ? 0 : 1);' "$WORK/.savings.json" "$WORK/.card.json"
 echo; echo "== e2e: all selections as expected"

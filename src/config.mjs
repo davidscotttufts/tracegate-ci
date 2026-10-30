@@ -63,6 +63,9 @@ export const DEFAULTS = Object.freeze({
   deps: { mode: 'auto', bar: { runs: 3, days: 1 } },
   // Phase 2: fail-first ordering. `shadow` scores it; `order` hands vitest the order.
   conductor: { mode: 'shadow' },
+  // Silence guard: a change that skips, focuses or deletes tests. `shadow` logs it;
+  // `enforce` makes the run red until a person allows it (src/silence.mjs).
+  silence: { mode: 'shadow', base: 'main' },
 });
 
 // Inputs every test in a lane depends on. A change to any of them runs the whole
@@ -153,6 +156,7 @@ export function ctx() {
     red: { ...DEFAULTS.red, ...(cfg.red ?? {}), ...(process.env.TRACEGATE_RED_ESCALATE ? { escalate: process.env.TRACEGATE_RED_ESCALATE !== 'off' } : {}) },
     deps: { ...DEFAULTS.deps, ...(cfg.deps ?? {}), bar: { ...DEFAULTS.deps.bar, ...(cfg.deps?.bar ?? {}) }, ...(process.env.TRACEGATE_DEPS ? { mode: process.env.TRACEGATE_DEPS } : {}) },
     conductor: { ...DEFAULTS.conductor, ...(cfg.conductor ?? {}), ...(process.env.TRACEGATE_CONDUCTOR ? { mode: process.env.TRACEGATE_CONDUCTOR } : {}) },
+    silence: { ...DEFAULTS.silence, ...(cfg.silence ?? {}), ...(process.env.TRACEGATE_SILENCE ? { mode: process.env.TRACEGATE_SILENCE } : {}) },
   };
   return _ctx;
 }

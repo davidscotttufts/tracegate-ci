@@ -4,7 +4,8 @@
 // tools are always on. The write tools need --allow-write: `cancel_queued` can only
 // cancel a QUEUED job, never a running one; `annotate_red` records an escalate-only
 // opinion (its one effect can only make a gate stricter, Phase 1b); `annotate_deps`
-// records a shadow prediction nothing reads back. Work itself is done with
+// records a shadow prediction nothing reads back; `train_add` only queues a ref for the
+// merge train, which lands nothing that was not gated green. Work itself is done with
 // `tracegate lease -- …` in the agent's own shell, so a lease stays bound to the
 // process that does the work (its liveness is that process's connection).
 //
@@ -83,6 +84,27 @@ const READ_TOOLS = [
       return Object.keys(ctx().lanes).map((l) => ({ lane: l, mode: effectiveMode(l), why: modeDecision(l).why }));
     },
   },
+  {
+    name: 'savings',
+    description: 'Per lane, what reusing verdicts would have saved so far: file runs and test time that could have been skipped, the projection at the audit rate, misses, and how far the lane is from its entry bar. Read from the shadow log, so it has numbers before enforcement starts.',
+    inputSchema: { type: 'object', properties: { lane: { type: 'string' } }, additionalProperties: false },
+    annotations: { readOnlyHint: true },
+    run: async ({ lane: l }) => (await import('./predictor.mjs')).savings({ lane: l }),
+  },
+  {
+    name: 'report_card',
+    description: 'Tracegate\'s own error rates per lane: misses per checked verdict and per run with 95% Wilson intervals, the triage of each miss, the longest a hole could have gone undetected, audit cost, and the Red Reader and Conductor scores. Read from the append-only logs.',
+    inputSchema: { type: 'object', properties: { lane: { type: 'string' } }, additionalProperties: false },
+    annotations: { readOnlyHint: true },
+    run: async ({ lane: l }) => (await import('./evidence.mjs')).reportCard({ lane: l }),
+  },
+  {
+    name: 'train_status',
+    description: 'The local merge train: the PRs queued for each target branch (id, ref, pinned commit) and the latest landed, rejected and dropped events with their reasons.',
+    inputSchema: { type: 'object', properties: { target: { type: 'string' } }, additionalProperties: false },
+    annotations: { readOnlyHint: true },
+    run: async ({ target }) => (await import('./train.mjs')).status({ target }),
+  },
 ];
 
 const WRITE_TOOLS = [
@@ -106,6 +128,13 @@ const WRITE_TOOLS = [
     }, required: ['id', 'affected', 'confidence', 'reasons'], additionalProperties: false },
     annotations: { readOnlyHint: false, destructiveHint: false },
     run: async (a) => (await import('./deps.mjs')).annotateDeps({ ...a, by: 'mcp' }),
+  },
+  {
+    name: 'train_add',
+    description: 'Queue a branch or ref for the local merge train, pinned to its current commit. It only queues: a person or a gate runs `tracegate train run`, which lands it only if its exact merge commit is gated green.',
+    inputSchema: { type: 'object', properties: { pr: { type: 'string', description: 'An id, or <id>=<ref>. A bare id is also the ref.' }, target: { type: 'string', default: 'main' } }, required: ['pr'], additionalProperties: false },
+    annotations: { readOnlyHint: false, destructiveHint: false },
+    run: async ({ pr, target }) => (await import('./train.mjs')).add({ pr, target }),
   },
   {
     name: 'cancel_queued',

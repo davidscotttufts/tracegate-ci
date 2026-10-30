@@ -1,6 +1,6 @@
 {
   "name": "tracegate-ci",
-  "version": "0.6.0",
+  "version": "0.8.0",
   "description": "Test-impact selection for Vitest from observed per-file footprints, and a local broker that gives every gate, daemon, measurement and AI agent on a machine one fair queue.",
   "license": "Apache-2.0",
   "author": "David Tufts",
@@ -53,7 +53,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node test/selftest.mjs && node test/broker.mjs && node test/adaptive.mjs && node test/red.mjs && node test/deps.mjs && node test/conductor.mjs && node test/jobserver.mjs && node test/onboarding.mjs",
+    "test": "node test/selftest.mjs && node test/broker.mjs && node test/adaptive.mjs && node test/red.mjs && node test/deps.mjs && node test/conductor.mjs && node test/jobserver.mjs && node test/onboarding.mjs && node test/evidence.mjs && node test/train.mjs && node test/silence.mjs",
     "test:sabotage": "node test/sabotage.mjs",
     "test:e2e": "bash examples/e2e.sh",
     "test:broker": "node test/broker.mjs",
@@ -63,7 +63,11 @@
     "test:conductor": "node test/conductor.mjs",
     "test:jobserver": "node test/jobserver.mjs",
     "test:vitest-matrix": "bash examples/vitest-matrix.sh",
-    "test:onboarding": "node test/onboarding.mjs"
+    "test:onboarding": "node test/onboarding.mjs",
+    "test:evidence": "node test/evidence.mjs",
+    "test:train": "node test/train.mjs",
+    "test:silence": "node test/silence.mjs",
+    "test:compare": "bash examples/compare-vitest.sh"
   },
   "peerDependencies": {
     "typescript": ">=5.0.0",

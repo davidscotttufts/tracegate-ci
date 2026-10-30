@@ -63,7 +63,7 @@ export function failuresOf(json, root) {
  * Build and store the packet for a red run. `rechecks` maps a missed file to
  * 'passed' | 'failed' (the runner re-runs each miss alone). Returns the packet.
  */
-export function writePacket({ lane: laneName, run, base, rechecks = {}, note = null }) {
+export function writePacket({ lane: laneName, run, base, rechecks = {}, note = null, silenced = null }) {
   const c = ctx();
   let pred = null; try { pred = JSON.parse(fs.readFileSync(path.join(run, 'predict.json'), 'utf8')); } catch { /* no prediction: a plain run */ }
   let json = null; try { json = JSON.parse(fs.readFileSync(path.join(run, 'results.json'), 'utf8')); } catch { /* no report */ }
@@ -96,6 +96,8 @@ export function writePacket({ lane: laneName, run, base, rechecks = {}, note = n
     machine: { cores: typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length, load1: +os.loadavg()[0].toFixed(2), freeMB: Math.round(os.freemem() / 1048576) },
     failedCount: failures.length, failed, moreFailed: failures.slice(MAX_FAILED).map((f) => f.file),
     changed: names ? names.split('\n') : [], diff: clip(diff, MAX_DIFF), note,
+    // Tests the change skipped, focused or deleted (silence.mjs): read them as part of the red.
+    silenced,
   };
   fs.mkdirSync(redDir(), { recursive: true });
   fs.writeFileSync(path.join(redDir(), `${id}.json`), JSON.stringify(packet, null, 1));

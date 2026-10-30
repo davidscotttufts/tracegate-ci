@@ -421,6 +421,89 @@ files after it were missed.
 **Next:** Milestone 2 (prove it): `tracegate savings`, a comparison with Vitest
 `recordDependencies`, `tracegate report-card`.
 
+### Milestone 2: Prove it (v0.7.0, done 2026-10-29)
+
+**Why.** Value arrived only after the 14-day entry bar, the obvious objection ("why not
+Vitest's own `recordDependencies`?") had no answer, and the miss accounting that sets
+Tracegate apart was never published as numbers.
+
+**What shipped:**
+- **`tracegate savings`**, from the shadow log, so a lane shows what it would save from its
+  first recorded run. The shadow row gains `total_s` and `reusable_s`. A MISS is never
+  counted as a saving, and the projection keeps the audit sample. `appendTsv` widens an
+  older log's header in place when the new header extends it, so old rows are kept.
+- **`tracegate report-card`** (`src/evidence.mjs`). A verdict counts as *checked* when shadow
+  ran it or enforce audited it; a verdict enforce reused unaudited is not evidence either
+  way. The miss rate is reported per checked verdict and per run, each with a 95% Wilson
+  interval.
+  - **§5's open question on hole latency, answered by publishing a bound:** *exposure*,
+    the time from the lane's last complete full run to the miss. A full run checks every
+    verdict, so a hole cannot go undetected longer than that.
+- **`examples/compare-vitest.sh`**, against Vitest 5.0.5, on five one-commit changes:
+  - a function edit selects 1 file against Vitest's 4;
+  - an edit to a function no test runs selects 0 against 3;
+  - an edit to a data file read with `fs` is caught by Tracegate and missed by Vitest;
+  - a lockfile bump re-runs every test that loaded the package, where Vitest runs none;
+  - a script a test runs as a **child process is missed by both**. That is published as
+    it is, with the `globals` remedy and the audit that turns it into a logged MISS.
+
+**Claims re-checked (2026-10-29):**
+- Vitest #11559 exists, open, `pending triage`, no comments (opened 2026-10-12), and
+  describes competing Vitest instances across worktrees. The broker docs' citation holds.
+- CloudBees Smart Tests (ex-Launchable) documents an **observation mode**
+  (`--observation` on `subset` or `record session`): every test runs and the subset is
+  scored, about 20 runs recommended. It is the nearest analogue to Tracegate's shadow mode,
+  without an audit after it starts skipping.
+- Datadog Test Optimization, which includes Test Impact Analysis: $20 per committer per month
+  billed annually, $29 on demand, 1M test spans per committer (Datadog pricing page). A
+  $24 monthly figure seen in a third-party comparison is not on Datadog's page.
+
+**Tests:** 21 evidence tests, 6 sabotage witnesses, and savings and report-card assertions
+in the end-to-end.
+
+**Next:** Milestone 3 (differentiate): the local merge train, the silence guard, partner
+recipes.
+
+### Milestone 3: Differentiate (v0.8.0, done 2026-10-29)
+
+**Why.** The merge gate that batches and bisects lived only in the private host project,
+and this package offered only advice (`conductor train`). Guards against an agent
+silencing tests worked at the edit level only; none checked the verdict.
+
+**What shipped:**
+- **`tracegate train`** (`src/train.mjs`), built fresh on the broker and the Conductor:
+  - the queue is an append-only `trainq-<host>.tsv`, each PR pinned to its commit;
+  - each batch is a `--no-ff` merge commit in a throwaway worktree, gated under a `train`
+    lease;
+  - a red batch is bisected by halves, the second half on top of what landed;
+  - a green batch lands by `update-ref <new> <old>`, or by `merge --ff-only` where the
+    target is checked out, and only if that checkout is clean;
+  - the outcome is fed to `conductor outcome`;
+  - one train runs per ledger at a time (a pid lock).
+  - Run for real on the sample repository: a batch of two went red, the good PR landed as
+    its gated merge commit, the red one was rejected, and all three gates ran as broker
+    leases of class `train`. The worktrees shared the ledger, so each re-gate found 5 of
+    6 verdicts reusable.
+- **The silence guard** (`src/silence.mjs`):
+  - it counts net additions only, so a pre-existing skip is never a finding;
+  - its base is the merge base with `main`, so a skip in an earlier commit of the branch
+    counts;
+  - it runs in shadow by default; `enforce` makes the run red.
+  - Lifting it is a person's act: `silence allow --by`, pinned to the file's blob. The
+    Claude Code hook now blocks agents from running `silence allow` and `triage`. A Red
+    Reader opinion cannot lift it.
+- **`docs/recipes/`**: claude-code-merge-queue (as its `checkCommand`, or replaced by the
+  train), edit-level guards, worktrees and containers (the broker socket), and `bin/ci`.
+
+**Tests:** 20 train tests and 19 silence tests, each invariant with a sabotage witness
+(12 new witnesses). Among them: a red PR never lands; the target points only at a
+gated-green tree; a moved target lands nothing; a pre-existing skip is not a finding; an
+allow is pinned to the file.
+
+**Not done here:** posting the drafted outward posts (the owner posts them).
+
+**Next:** Milestone 4: a runner-adapter boundary, then Jest; `tracegate attest`.
+
 ### Out of scope, deliberately
 
 | Out of scope | Why |

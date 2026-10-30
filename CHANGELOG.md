@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.8.0 (unreleased): merge train and silence guard
+
+Includes 0.7.0, which was not published on its own.
+
+- `tracegate train add | drop | status | run`: a local merge train.
+  - Each batch is gated as its exact merge commit in a throwaway worktree, under a broker
+    lease of class `train`.
+  - A red batch is bisected; a green one lands by compare-and-swap.
+  - A moved target lands nothing, and pushing is opt-in.
+  - New MCP tools `train_status` (read) and `train_add` (write).
+- The silence guard: net-added skips, `.only`, `if (false)`, removed tests and deleted
+  test files, against the merge base.
+  - `silence.mode` is `shadow` (the default), `enforce` or `off`.
+  - `tracegate silence check | allow`. An allow is a person's, pinned to the file's
+    contents.
+  - Red packets carry the findings.
+- The Claude Code hook also blocks agents from running `tracegate silence allow` and
+  `tracegate triage`.
+- `docs/recipes/`: claude-code-merge-queue, edit-level guards, worktrees and containers,
+  and a `bin/ci` for TypeScript.
+
+## 0.7.0 (unreleased): evidence
+
+- `tracegate savings [--json]`: reusable file runs and test time per lane, from the shadow
+  log, with the projection at the audit rate and a countdown to the entry bar. A shadow run
+  prints it as one line. The shadow log gains `total_s` and `reusable_s`; older logs are
+  widened in place and their rows kept.
+- `tracegate report-card [--json] [--out f]`: misses per checked verdict and per run with
+  95% Wilson intervals, triage, hole exposure, audit cost, Red Reader and Conductor scores.
+- MCP read tools `savings` and `report_card`.
+- `examples/compare-vitest.sh` and `docs/compare/vitest-record-dependencies.md`: Tracegate
+  and Vitest 5 `recordDependencies` on the same five changes, asserted in CI.
+
 ## 0.6.0 (unreleased): ready to install
 
 - `tracegate init [--write] [--mcp]`: proposes lanes from the repository's Vitest projects

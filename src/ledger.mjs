@@ -74,14 +74,25 @@ export function readTsv(prefix) {
   }
   return rows;
 }
+// A log written before a column was added has the old header, which is a prefix
+// of the new one. Widen the header line so new rows are read in full; old rows
+// simply lack the new columns.
+function upgradeHeader(f, header) {
+  const text = fs.readFileSync(f, 'utf8');
+  const nl = text.indexOf('\n');
+  const old = (nl < 0 ? text : text.slice(0, nl)).split('\t');
+  if (old.length >= header.length || old.some((h, i) => h !== header[i])) return;
+  writeAtomic(f, header.join('\t') + (nl < 0 ? '\n' : text.slice(nl)));
+}
 /** Append one row to this host's `<prefix><host>.tsv`, writing the header first if new. */
 export function appendTsv(prefix, header, values) {
   fs.mkdirSync(ledgerDir(), { recursive: true });
   const f = path.join(ledgerDir(), `${prefix}${ctx().host}.tsv`);
   if (!fs.existsSync(f)) fs.writeFileSync(f, header.join('\t') + '\n');
+  else upgradeHeader(f, header);
   fs.appendFileSync(f, values.map((v) => String(v).replace(/[\t\n]/g, ' ')).join('\t') + '\n');
 }
-export const SHADOW_HEADER = ['at', 'lane', 'mode', 'head', 'files', 'must_run', 'reusable', 'audited', 'run_time_pct', 'misses'];
+export const SHADOW_HEADER = ['at', 'lane', 'mode', 'head', 'files', 'must_run', 'reusable', 'audited', 'run_time_pct', 'misses', 'total_s', 'reusable_s'];
 export const MISSES_HEADER = ['at', 'lane', 'head', 'file', 'reason'];
 export const TRIAGE_HEADER = ['at', 'lane', 'file', 'head', 'verdict'];
 export const REASONS_HEADER = ['at', 'lane', 'mode', 'head', 'files', 'must_run', 'top'];

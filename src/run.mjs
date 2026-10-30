@@ -8,7 +8,9 @@
 //   5. recheck  each MISS re-run ONCE, alone, at the same tree; a pass is triaged `flake`
 //   6. ingest   footprints of green files, only if HEAD did not move during the run
 //   7. full     a green whole-lane run is recorded as a complete full run
-// Beside those: the Conductor's fail-first order is written (and handed to
+// After report, the silence guard (silence.mjs) checks the change for skipped,
+// focused or deleted tests; under silence.mode `enforce` an unallowed one makes
+// the run red. Beside those: the Conductor's fail-first order is written (and handed to
 // vitest under conductor.mode `order`) and scored on a red run; a lockfile run
 // leaves a dependency packet for the oracle (Phases 2 and 3, both shadow).
 // The exit code is vitest's. Nothing here can turn a red run green.
@@ -21,8 +23,9 @@ import { fileURLToPath } from 'node:url';
 import { rank, recentFailures, scoreOrder } from './conductor.mjs';
 import { ctx, git, lane, lockfileOf } from './config.mjs';
 import { lockDiff, writeDepsPacket } from './deps.mjs';
-import { effectiveMode, fullDone, head, ingest, loadResults, report, select, triage } from './predictor.mjs';
+import { effectiveMode, fullDone, head, ingest, loadResults, report, savings, savingsLine, select, triage } from './predictor.mjs';
 import { writePacket } from './red.mjs';
+import { guard } from './silence.mjs';
 
 const REPORTER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'vitest-reporter.mjs');
 
@@ -119,11 +122,16 @@ export function runLane(o, userArgs) {
       }
     } catch (e) { console.log(`tracegate (${ln.name}): no dependency packet (${e.message}).`); }
   }
+  // Silence guard: skips, .only, deleted tests. Shadow logs them; enforce makes the run red.
+  let silenced = null;
+  try { silenced = guard({ lane: ln.name, head: rep?.head ?? headAtStart, base: o.base }); }
+  catch (e) { console.log(`tracegate (${ln.name}): silence guard skipped (${e.message}).`); }
+  if (silenced?.red && rc === 0) rc = 1;
   // Red Reader (Phase 1): a red run leaves a packet for an agent to read. It
   // only records; the one thing an opinion can do is escalate a MISS (Phase 1b).
   // TRACEGATE_RED=off skips it.
   if (rc !== 0 && process.env.TRACEGATE_RED !== 'off') {
-    try { const p = writePacket({ lane: ln.name, run, base: o.base, rechecks }); console.log(`tracegate (${ln.name}): red packet ${p.id} — an agent can read it with \`tracegate red show ${p.id}\` or the MCP tool read_red.`); }
+    try { const p = writePacket({ lane: ln.name, run, base: o.base, rechecks, silenced: silenced?.findings?.length ? silenced.findings : null }); console.log(`tracegate (${ln.name}): red packet ${p.id} — an agent can read it with \`tracegate red show ${p.id}\` or the MCP tool read_red.`); }
     catch (e) { console.log(`tracegate (${ln.name}): could not write the red packet (${e.message}); the run is red either way.`); }
   }
   ingest({ lane: ln.name, run, 'expect-head': headAtStart });
@@ -133,6 +141,8 @@ export function runLane(o, userArgs) {
     const all = Object.keys(pred.decisions).every((f) => results.get(f)?.status === 'passed');
     if (all && head() === headAtStart) fullDone({ lane: ln.name });
   }
+  // Day-one value: what reuse would have saved so far, while still in shadow.
+  if (mode === 'shadow') { try { console.log(savingsLine(savings({ lane: ln.name })[0])); } catch { /* evidence only */ } }
   if (!o.run) fs.rmSync(run, { recursive: true, force: true });
   return rc;
 }
