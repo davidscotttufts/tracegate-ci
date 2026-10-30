@@ -271,6 +271,28 @@ const WITNESSES = [
   ['removed-import-always-runs', 'src/predictor.mjs',
     "if (k.startsWith('<import-old:')) return", "if (false) return",
     'RUN  value import of an already-loaded module removed'],
+  // Onboarding (test/onboarding.mjs): init, the seam canary, the lease-guard hook.
+  ['init-never-overwrites', 'src/init.mjs',
+    'if (exists) console.log', 'if (false) console.log',
+    'an existing tracegate.config.json is never overwritten', 'onboarding.mjs'],
+  ['recorder-goes-first', 'src/init.mjs',
+    '(s) => `${s}${RECORDER_LINE}, `', "(s) => s.replace('[', '[/* after yours: */ ')",
+    'the recorder goes FIRST in an existing setupFiles list', 'onboarding.mjs'],
+  ['canary-counts-unmapped', 'src/predictor.mjs',
+    '(Array.isArray(ex) || mapOffsets(run, ex) ? mapped++ : unmapped++)', 'mapped++',
+    'canary: a module whose compiled text is missing counts as unmapped', 'onboarding.mjs'],
+  ['vitest-range-upper-bound', 'src/config.mjs',
+    'return maj < VITEST_TESTED.belowMajor && (', 'return (',
+    'Vitest 4.0, 3.x and 6.x are outside it', 'onboarding.mjs'],
+  ['hook-lets-leases-through', 'hooks/lease-guard.mjs',
+    "if (env.TRACEGATE_HOOK === 'off' || env.TRACEGATE_LEASE) return null;", "if (env.TRACEGATE_HOOK === 'off') return null;",
+    'hook: a run inside a lease passes', 'onboarding.mjs'],
+  ['hook-only-in-tracegate-repos', 'hooks/lease-guard.mjs',
+    'if (!(hasTracegate ?? repoUsesTracegate)(cwd)) return null;', '',
+    'hook: a repository without Tracegate passes', 'onboarding.mjs'],
+  ['hook-blocks-bare-runs', 'hooks/lease-guard.mjs',
+    "if (typeof command !== 'string' || !TEST_CMD.test(command)) return null;", 'return null;',
+    'hook: a bare vitest run is blocked', 'onboarding.mjs'],
 ];
 
 // A broken rule can make a check wait forever, and a test blocked in spawnSync
@@ -311,6 +333,7 @@ for (const [id, file, from, to, mustFail, script = 'selftest.mjs'] of todo) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `tracegate-sabotage-${id}-`));
   fs.cpSync(path.join(PKG, 'src'), path.join(dir, 'src'), { recursive: true });
   fs.cpSync(path.join(PKG, 'test'), path.join(dir, 'test'), { recursive: true });
+  fs.cpSync(path.join(PKG, 'hooks'), path.join(dir, 'hooks'), { recursive: true });
   fs.copyFileSync(path.join(PKG, 'package.json'), path.join(dir, 'package.json'));
   fs.symlinkSync(path.join(PKG, 'node_modules'), path.join(dir, 'node_modules'));
   const f = path.join(dir, file);

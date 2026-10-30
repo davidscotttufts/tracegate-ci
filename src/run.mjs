@@ -26,7 +26,7 @@ import { writePacket } from './red.mjs';
 
 const REPORTER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'vitest-reporter.mjs');
 
-function vitestBin(laneAbs) {
+export function vitestBin(laneAbs) {
   return path.join(path.dirname(createRequire(path.join(laneAbs, 'package.json')).resolve('vitest/package.json')), 'vitest.mjs');
 }
 

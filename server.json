@@ -1,0 +1,17 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "io.github.davidscotttufts/tracegate-ci",
+  "title": "Tracegate CI",
+  "description": "Local CI broker and test-impact ledger for agents: queue state, lane modes, red-run packets and escalate-only opinions.",
+  "repository": { "url": "https://github.com/davidscotttufts/tracegate-ci", "source": "github" },
+  "version": "0.6.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "tracegate-ci",
+      "version": "0.6.0",
+      "transport": { "type": "stdio" },
+      "packageArguments": [{ "type": "positional", "value": "mcp" }]
+    }
+  ]
+}

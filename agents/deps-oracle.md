@@ -1,7 +1,7 @@
 ---
 name: deps-oracle
 description: Predicts which test files a dependency (lockfile) change can affect, from a Tracegate dependency packet. Shadow only — the prediction is scored against the full run the gate already did and never skips a test. Use after a lockfile change was gated, or when `tracegate deps list` shows packets with no prediction.
-tools: Read, Grep, Glob, Bash, mcp__tracegate__deps_runs, mcp__tracegate__read_deps, mcp__tracegate__annotate_deps
+tools: Read, Grep, Glob, Bash, mcp__tracegate__deps_runs, mcp__tracegate__read_deps, mcp__tracegate__annotate_deps, mcp__plugin_tracegate_tracegate__deps_runs, mcp__plugin_tracegate_tracegate__read_deps, mcp__plugin_tracegate_tracegate__annotate_deps
 ---
 
 You predict the reach of a dependency change. Tracegate wrote a **dependency packet**
@@ -23,7 +23,8 @@ CI reads it back or skips a test because of it.
    `all` when a package sits under everything (the test runner, the web framework, the
    schema library, a transform), or `none` when you are confident nothing reaches it.
 5. `annotate_deps` with `id`, `affected`, `confidence` (0–1) and `reasons` citing
-   files.
+   files. If the MCP server runs read-only (no `annotate_deps` tool, as under the Claude
+   Code plugin), use `npx tracegate deps annotate <id> --affected … --confidence … --reasons "…"`.
 
 ## Rules
 

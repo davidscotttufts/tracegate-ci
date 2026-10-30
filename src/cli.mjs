@@ -8,6 +8,10 @@ import { sync } from './sync.mjs';
 
 const USAGE = `usage: tracegate <command> [options]
 
+  init    [--write] [--mcp]            propose lanes from the repo's Vitest configs; --write
+                                       writes tracegate.config.json and wires the recorder
+  doctor  [--lane <l>] [--canary]      check Node, Vitest, the recorder and the ledger;
+                                       --canary records one test file to check the seam
   run     --lane <l> [--mode m] [--run <dir>] [--audit r] -- <vitest args>
                                        select → vitest (recorded) → report → ingest
   mode    --lane <l>                   print the effective mode (off|shadow|enforce)
@@ -97,7 +101,9 @@ function printMachine(m, json) {
 const cmd = process.argv[2];
 const { o, rest } = parse(process.argv.slice(3));
 try {
-  if (cmd === 'mode') { const d = modeDecision(lane(o.lane).name); console.log(effectiveMode(lane(o.lane).name)); if (o.why) console.error(d.why); }
+  if (cmd === 'init') process.exitCode = (await import('./init.mjs')).init(o);
+  else if (cmd === 'doctor') process.exitCode = (await import('./init.mjs')).doctor(o);
+  else if (cmd === 'mode') { const d = modeDecision(lane(o.lane).name); console.log(effectiveMode(lane(o.lane).name)); if (o.why) console.error(d.why); }
   else if (cmd === 'select') select(o);
   else if (cmd === 'ingest') ingest(o);
   else if (cmd === 'report') report(o);

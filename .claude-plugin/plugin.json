@@ -1,0 +1,16 @@
+{
+  "name": "tracegate",
+  "version": "0.6.0",
+  "description": "Local CI for agents: runs only the tests a change can affect once skipping has earned it, queues every agent's test runs on the machine, and lets a model make a red stricter, never greener.",
+  "author": { "name": "David Tufts" },
+  "homepage": "https://github.com/davidscotttufts/tracegate-ci",
+  "repository": "https://github.com/davidscotttufts/tracegate-ci",
+  "license": "Apache-2.0",
+  "keywords": ["vitest", "test-impact", "local-ci", "mcp", "merge-queue", "flaky-tests"],
+  "mcpServers": {
+    "tracegate": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/src/cli.mjs", "mcp"]
+    }
+  }
+}

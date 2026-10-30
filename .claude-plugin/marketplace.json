@@ -1,0 +1,13 @@
+{
+  "name": "tracegate",
+  "owner": { "name": "David Tufts" },
+  "metadata": { "description": "Tracegate CI: evidence-backed local CI for TypeScript agents." },
+  "plugins": [
+    {
+      "name": "tracegate",
+      "source": "./",
+      "description": "Test-impact selection for Vitest that earns the right to skip, a machine-wide queue for agents' test runs, and escalate-only red reading.",
+      "category": "testing"
+    }
+  ]
+}

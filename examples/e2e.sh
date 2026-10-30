@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end: Tracegate on examples/sample-repo, in a throwaway copy.
 #
+#   0. tracegate doctor --canary on it
 #   1. copy the sample to a temp dir, install it, commit it (a footprint names a commit)
 #   2. run the whole lane recorded, in shadow; footprints are ingested
 #   3. edit multiply() and commit → select under enforce → ONLY multiply.test.ts;
@@ -20,6 +21,10 @@ echo "== work dir: $WORK"
 rsync -a --exclude node_modules --exclude package-lock.json "$TG/examples/sample-repo/" "$WORK/"
 cd "$WORK"
 npm pkg set "devDependencies.tracegate-ci=file:$TG"
+# VITEST_VERSION=<v>: run against another Vitest (examples/vitest-matrix.sh).
+[ -n "${VITEST_VERSION:-}" ] && npm pkg set "devDependencies.vitest=$VITEST_VERSION"
+# Vitest 5 takes vite as a peer, which --legacy-peer-deps below does not install.
+[ -n "${VITE_VERSION:-}" ] && npm pkg set "devDependencies.vite=$VITE_VERSION"
 # --install-links copies the package in as a registry install would.
 # --legacy-peer-deps: npm 10 crashes resolving vite's optional devtools peers (vitest@*).
 nice -n 19 npm install --install-links --legacy-peer-deps --no-audit --no-fund --loglevel=error
@@ -40,8 +45,18 @@ expect_selection() {
   if [ "$got" = "$want" ]; then echo "   ✓ $label → [ $got]"; else echo "   ✗ $label → got [ $got], want [ $want]"; exit 1; fi
 }
 
+echo; echo "== 0. doctor: the setup is ready and the recorder's seam maps"
+$TGX doctor --canary
+
 echo; echo "== 1. the whole lane, recorded, in shadow"
-$TGX run --mode shadow -- --maxWorkers=2
+$TGX run --mode shadow -- --maxWorkers=2 | tee "$WORK/.run1.log"
+echo "   vitest $(node -p "require('vitest/package.json').version")"
+# STRICT_SEAM=1: every loaded module must be mapped (the recorder's seam held).
+if [ "${STRICT_SEAM:-}" = 1 ]; then
+  share="$(sed -n 's/.*unmapped modules \([0-9.]*\)%.*/\1/p' "$WORK/.run1.log" | tail -1)"
+  [ -n "$share" ] || { echo "   ✗ no ingest line in the run output"; exit 1; }
+  if [ "$share" = "0.0" ]; then echo "   ✓ seam mapped: unmapped modules 0.0%"; else echo "   ✗ seam moved: unmapped modules $share%"; exit 1; fi
+fi
 
 echo; echo "== 2. edit multiply(), commit, select"
 sed -i.bak 's/return round(a \* b);/return round(a * b * 1);/' src/math.ts && rm src/math.ts.bak

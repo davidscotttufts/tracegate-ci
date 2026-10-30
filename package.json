@@ -1,8 +1,29 @@
 {
   "name": "tracegate-ci",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Test-impact selection for Vitest from observed per-file footprints, and a local broker that gives every gate, daemon, measurement and AI agent on a machine one fair queue.",
   "license": "Apache-2.0",
+  "author": "David Tufts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/davidscotttufts/tracegate-ci.git"
+  },
+  "homepage": "https://github.com/davidscotttufts/tracegate-ci#readme",
+  "bugs": {
+    "url": "https://github.com/davidscotttufts/tracegate-ci/issues"
+  },
+  "keywords": [
+    "vitest",
+    "test-impact-analysis",
+    "test-selection",
+    "local-ci",
+    "merge-queue",
+    "claude-code",
+    "mcp",
+    "ai-agents",
+    "flaky-tests"
+  ],
+  "mcpName": "io.github.davidscotttufts/tracegate-ci",
   "type": "module",
   "bin": {
     "tracegate": "src/cli.mjs"
@@ -18,16 +39,21 @@
   },
   "files": [
     "src/",
+    "agents/",
+    "skills/",
+    "hooks/",
+    ".claude-plugin/",
+    "server.json",
     "LICENSE",
     "NOTICE",
     "README.md",
-    "agents/"
+    "CHANGELOG.md"
   ],
   "engines": {
     "node": ">=22"
   },
   "scripts": {
-    "test": "node test/selftest.mjs && node test/broker.mjs && node test/adaptive.mjs && node test/red.mjs && node test/deps.mjs && node test/conductor.mjs && node test/jobserver.mjs",
+    "test": "node test/selftest.mjs && node test/broker.mjs && node test/adaptive.mjs && node test/red.mjs && node test/deps.mjs && node test/conductor.mjs && node test/jobserver.mjs && node test/onboarding.mjs",
     "test:sabotage": "node test/sabotage.mjs",
     "test:e2e": "bash examples/e2e.sh",
     "test:broker": "node test/broker.mjs",
@@ -35,13 +61,19 @@
     "test:red": "node test/red.mjs",
     "test:deps": "node test/deps.mjs",
     "test:conductor": "node test/conductor.mjs",
-    "test:jobserver": "node test/jobserver.mjs"
+    "test:jobserver": "node test/jobserver.mjs",
+    "test:vitest-matrix": "bash examples/vitest-matrix.sh",
+    "test:onboarding": "node test/onboarding.mjs"
   },
   "peerDependencies": {
-    "typescript": ">=5.0.0"
+    "typescript": ">=5.0.0",
+    "vitest": ">=4.1.0 <6"
   },
   "peerDependenciesMeta": {
     "typescript": {
+      "optional": true
+    },
+    "vitest": {
       "optional": true
     }
   },

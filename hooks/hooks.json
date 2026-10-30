@@ -1,0 +1,13 @@
+{
+  "description": "Queue agents' test runs through the Tracegate broker in repositories that use Tracegate.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/lease-guard.mjs\"", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}
