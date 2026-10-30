@@ -54,7 +54,14 @@ met its own bar. An oracle for the remaining cases runs in shadow only. See
 [Dependency changes](#dependency-changes).
 
 **Phase 0.5c is done: a make jobserver** per lease (`lease --jobserver`), so make,
-Ninja and cargo children stay within the grant. Version 0.5.0, not yet published to npm.
+Ninja and cargo children stay within the grant.
+
+**Version 0.6.0: ready to install.**
+- `tracegate init` and `tracegate doctor` (see [Quick start](#quick-start)).
+- A Claude Code plugin (see [Claude Code plugin](#claude-code-plugin)).
+- A Vitest version matrix in CI covering 4.1 to 5.x.
+
+The npm release is pending.
 
 ## The idea in one paragraph
 
@@ -68,9 +75,52 @@ and the model gets no tools and no credentials.
 ## Requirements
 
 - Node.js ≥ 22, git.
-- Vitest 4.1 (the recorder hooks the `vm.runInThisContext` seam Vitest 4.1 uses to
-  evaluate modules; a Vitest that moves it degrades to *safe*, see below).
+- Vitest 4.1 to 5.x.
+  - The recorder hooks the `vm.runInThisContext` seam Vitest uses to evaluate modules.
+  - CI runs the end-to-end against each supported version (`npm run test:vitest-matrix`).
+  - A Vitest that moves the seam degrades to *safe*. `tracegate doctor --canary` tells you
+    when that has happened.
 - `typescript` installed in the target repository (used to parse source files).
+
+## Quick start
+
+```sh
+npm install --save-dev tracegate-ci
+npx tracegate init              # proposes one lane per Vitest project; prints, changes nothing
+npx tracegate init --write --mcp
+npx tracegate doctor --canary   # Node, Vitest, typescript, recorder, ledger, and one recorded file
+npx tracegate run               # shadow at first: everything runs; status shows the countdown
+```
+
+`init --write` does three things:
+- writes `tracegate.config.json`;
+- adds the recorder to each Vitest config it can patch safely, and tells you which ones
+  to edit by hand;
+- with `--mcp`, registers the MCP server in `.mcp.json`.
+
+It never overwrites an existing config. The sections below are the same steps done by hand.
+
+### Claude Code plugin
+
+```
+/plugin marketplace add davidscotttufts/tracegate-ci
+/plugin install tracegate@tracegate
+```
+
+The plugin bundles:
+- **The MCP server:** read-only tools; see [For AI agents](#for-ai-agents-mcp).
+- **The `red-reader` and `deps-oracle` subagents.**
+- **Two skills:**
+  - `tracegate-gate`: how to run tests and read reds here, and what not to do to a red;
+  - `tracegate-setup`: install and check.
+- **A `PreToolUse` hook** for repositories with a `tracegate.config.json`. It blocks a bare
+  `vitest` or `npm test` started outside a broker lease, and names the
+  `tracegate run` / `tracegate lease` form to use instead. That way every agent's test
+  run queues with the gates on the same machine.
+  - Commands that already go through `tracegate` are not blocked.
+  - Runs inside a lease are not blocked.
+  - Other repositories are not blocked.
+  - `TRACEGATE_HOOK=off` turns it off.
 
 ## Usage
 
@@ -317,7 +367,7 @@ Details and the per-platform signals: [docs/design/broker.md §9](docs/design/br
 Register it with Claude Code:
 
 ```sh
-claude mcp add tracegate -- npx tracegate mcp
+claude mcp add tracegate -- npx tracegate mcp    # or: tracegate init --write --mcp, or the plugin
 ```
 
 An agent checks `queue_status` before heavy work, and runs the work with
@@ -462,9 +512,10 @@ Any change to an unmapped module means "run", so predictions stay safe but get c
 
 ```sh
 npm install                 # typescript, for parsing
-npm test                    # self-test, broker, adaptive capacity, Red Reader, dependency rule, Conductor, jobserver
+npm test                    # self-test, broker, adaptive capacity, Red Reader, dependency rule, Conductor, jobserver, onboarding
 node test/sabotage.mjs      # breaks each rule in a temp copy; each must turn the self-test red
 bash examples/e2e.sh        # end-to-end on examples/sample-repo (needs network for npm install)
+npm run test:vitest-matrix  # the end-to-end once per supported Vitest version, seam strictly mapped
 ```
 
 The self-test asserts both directions on purpose: a predictor that always says "run" fails

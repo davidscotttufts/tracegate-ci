@@ -19,6 +19,7 @@
 //   TRACEGATE_CONDUCTOR     off|shadow|order: fail-first ordering (default shadow)
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -167,6 +168,25 @@ export function lane(name) {
   const l = lanes[n];
   if (!l) throw new Error(`unknown lane ${n} (${names.join('|')})`);
   return l;
+}
+
+// The Vitest versions whose module-evaluation seam the recorder is tested
+// against (examples/vitest-matrix.sh). Keep in step with peerDependencies.vitest.
+export const VITEST_TESTED = { min: [4, 1], belowMajor: 6 };
+
+/** The Vitest version installed for a lane, or null when none resolves. */
+export function vitestVersion(ln) {
+  try {
+    const req = createRequire(path.join(ctx().root, ln.dir, 'package.json'));
+    return JSON.parse(fs.readFileSync(req.resolve('vitest/package.json'), 'utf8')).version;
+  } catch { return null; }
+}
+
+/** Is a Vitest version inside the tested range? */
+export function vitestTested(v) {
+  const [maj, min] = String(v).split('.').map(Number);
+  if (!Number.isInteger(maj) || !Number.isInteger(min)) return false;
+  return maj < VITEST_TESTED.belowMajor && (maj > VITEST_TESTED.min[0] || (maj === VITEST_TESTED.min[0] && min >= VITEST_TESTED.min[1]));
 }
 
 /** The lane's lockfile: configured, else the first that exists in the lane dir, then the root. */

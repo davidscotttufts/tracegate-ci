@@ -25,7 +25,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
-import { ctx, git, lane, lockfileOf, isTestFile, isTsFile, FP_VERSION } from './config.mjs';
+import { ctx, git, lane, lockfileOf, isTestFile, isTsFile, vitestTested, vitestVersion, FP_VERSION } from './config.mjs';
 import { depsBar, depsOnlyPackageJson, lockDiff, repoKey } from './deps.mjs';
 import { model } from './model.mjs';
 import { ModuleMap } from './recorder.mjs';
@@ -172,7 +172,11 @@ export function ingest(o) {
   const share = mapped + unmapped ? (100 * unmapped / (mapped + unmapped)).toFixed(1) : '0.0';
   console.log(`tracegate ingest (${ln.name}): ${recorded} footprint(s) at ${H.slice(0, 9)} in ${Math.round((Date.now() - t0) / 1000)} s; ${dropped} dropped (not green); ${noVerdict} without a verdict; unmapped modules ${share}%.`);
   if (overBudget) console.log(`tracegate ingest (${ln.name}): time budget (${budgetMs / 1000} s) reached — ${overBudget} file(s) not recorded this run; they will simply run next time.`);
-  if (Number(share) > 5) console.log(`\x1b[33mtracegate: ${share}% of loaded modules could not be mapped — the recorder's vitest seam may have moved (see src/recorder.mjs). Predictions stay safe (unmapped ⇒ run) but get coarse.\x1b[0m`);
+  if (Number(share) > 5) {
+    const v = vitestVersion(ln);
+    const where = v ? `vitest ${v}${vitestTested(v) ? '' : ' (outside the tested range)'}` : 'this vitest';
+    console.log(`\x1b[33mtracegate: DEGRADED TO SAFE — ${share}% of loaded modules could not be mapped; ${where} may have moved the recorder's seam (see src/recorder.mjs; \`tracegate doctor\` checks it). Predictions stay safe (unmapped ⇒ run) but get coarse.\x1b[0m`);
+  }
   return { recorded, dropped, noVerdict, overBudget, unmappedPct: Number(share) };
 }
 
@@ -234,6 +238,19 @@ function mapOffsets(run, ex) {
   const lines = new Set();
   for (const off of ex.offs) { if (off < mm.prefix) continue; const l = mm.originalLine(off); if (l) lines.add(l); }
   return [...lines];
+}
+
+/** How many recorded modules in a run's raw footprints map to source, and how many do not
+ *  (`tracegate doctor`'s seam canary; ingest counts the same way). */
+export function seamShare(run) {
+  let mapped = 0, unmapped = 0;
+  const rawDir = path.join(run, 'raw');
+  for (const f of fs.existsSync(rawDir) ? fs.readdirSync(rawDir).filter((x) => x.endsWith('.json')) : []) {
+    let raw; try { raw = JSON.parse(fs.readFileSync(path.join(rawDir, f), 'utf8')); } catch { continue; }
+    unmapped += raw.unmapped.length;
+    for (const ex of Object.values(raw.exec)) (Array.isArray(ex) || mapOffsets(run, ex) ? mapped++ : unmapped++);
+  }
+  return { mapped, unmapped };
 }
 
 /** Per-file verdicts from vitest's JSON reporter (`<run>/results.json`). */

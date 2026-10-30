@@ -1,6 +1,6 @@
 # Tracegate CI — Roadmap
 
-Last updated: 2026-10-24 (Phase 0 and Phase 0.5 done).
+Last updated: 2026-10-29 (Phases 0–3 done; Milestone 1 of the gap plan, distribution, done).
 
 This document records:
 1. what the industry has done to make CI faster without making it less trustworthy;
@@ -373,6 +373,53 @@ published, whatever they show.
 > - **Known gaps:** a package a test only spawns as a process, and a native addon
 >   loaded with dlopen, are invisible to V8 coverage. The audit, the full-run backstop
 >   and the rule's own bar are what would catch them.
+
+### Milestone 1: Ship it (v0.6.0, done 2026-10-29)
+
+**Why.** A competitive survey (Oct 2026) found no tool that combines what Tracegate does.
+It also found three gaps, all about distribution rather than mechanism:
+- no install path;
+- no Claude Code integration beyond a hand-registered MCP server;
+- an untested coupling to one Vitest minor version.
+
+**What shipped:**
+- **`tracegate init`:**
+  - proposes one lane per Vitest project, with its setup directories as globals;
+  - `--write` writes the config and adds the recorder FIRST to each `setupFiles` it can
+    patch textually. It never overwrites a config, and names the ones a person must edit;
+  - `--mcp` registers the server.
+- **`tracegate doctor`:**
+  - checks Node, the Vitest version against the tested range, typescript, the recorder
+    wiring and the ledger;
+  - `--canary` records one test file and counts mapped against unmapped modules, the same
+    count ingest uses.
+- **Vitest 4.1 to 5.x, measured.** `examples/vitest-matrix.sh` runs the end-to-end once per
+  version with `STRICT_SEAM=1` (0.0% unmapped). Vitest 5.0.5 keeps the seam.
+  - Ingest now reports a moved seam as `DEGRADED TO SAFE` and names the Vitest version.
+  - `peerDependencies.vitest` is `>=4.1.0 <6`.
+- **A Claude Code plugin** (`.claude-plugin/`), with the repository as its own marketplace:
+  - the MCP server (read-only);
+  - both subagents, whose tool lists also name the plugin-namespaced tools;
+  - two skills;
+  - a `PreToolUse` hook (`hooks/lease-guard.mjs`). In a Tracegate repository it blocks a
+    bare `vitest` or `npm test` outside a broker lease, so agents' runs queue with the
+    gates. Any error in the hook lets the command run.
+- **Release plumbing:**
+  - GitHub Actions CI (Node 22 and 24, ubuntu and macOS, sabotage, e2e, the Vitest matrix);
+  - a tag-triggered `npm publish --provenance`;
+  - an MCP Registry `server.json`.
+
+**Tests:** 27 onboarding tests and 7 new sabotage witnesses. One witness found a real bug
+before release: `setupFiles` parsing stopped at the recorder's own nested `]`, so setup
+files after it were missed.
+
+**Left to the owner:**
+- the npm release (add `NPM_TOKEN`, then push tag `v0.6.0`);
+- `mcp-publisher publish`;
+- a plugin icon, before the first marketplace submission.
+
+**Next:** Milestone 2 (prove it): `tracegate savings`, a comparison with Vitest
+`recordDependencies`, `tracegate report-card`.
 
 ### Out of scope, deliberately
 

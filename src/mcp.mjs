@@ -9,10 +9,11 @@
 // process that does the work (its liveness is that process's connection).
 //
 // Transport: newline-delimited JSON-RPC 2.0 on stdin/stdout. Logs go to stderr.
+import fs from 'node:fs';
 import { call } from './broker/client.mjs';
 
 const SUPPORTED = ['2025-06-18', '2025-03-26', '2024-11-05'];
-const pkg = { name: 'tracegate', version: '0.5.0' };
+const pkg = { name: 'tracegate', version: JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version };
 
 const READ_TOOLS = [
   {
