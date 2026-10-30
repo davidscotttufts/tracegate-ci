@@ -1,0 +1,6 @@
+{
+  "lanes": {
+    "sample": { "dir": ".", "src": "src", "runner": "jest" }
+  },
+  "audit": 0.05
+}

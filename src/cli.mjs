@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Tracegate CLI. See README.md "Usage".
 import { lane } from './config.mjs';
-import { effectiveMode, fullDone, ingest, modeDecision, report, select, status, triage } from './predictor.mjs';
+import { effectiveMode, fullDone, ingest, modeDecision, printSavings, report, select, status, triage } from './predictor.mjs';
 import { replay } from './replay.mjs';
 import { runLane } from './run.mjs';
 import { sync } from './sync.mjs';
@@ -35,7 +35,26 @@ const USAGE = `usage: tracegate <command> [options]
   conductor train --lane <l> --pr <id>=<ref> … [--base ref]
           | outcome --id <advice> [--red a,b] [--combination] | score
                                        fail-first order score, and train-composition advice
+  train   add --pr <id>=<ref> [--target main] | drop --pr <id> | status [--json]
+          | run [--target main] [--lane l] [--gate "<cmd>"] [--tokens n] [--no-lease] [--push]
+                                       local merge train: each batch is gated as its exact
+                                       merge commit, red batches are bisected, green ones land
+                                       by compare-and-swap; pushing is opt-in
+  silence check [--lane l] [--base ref] [--json] | allow --file <f> [--kind k] --by <name>
+                                       tests the change skipped, focused or deleted; allow is
+                                       a person's decision (the Claude Code hook blocks agents)
+  attest  [--commit c] [--lane l] [--sign | --no-sign] [--key k] [--status]
+                                       sign what the green runs at a commit tested, as a
+                                       git note (refs/notes/tracegate); --status also sets a
+                                       GitHub commit status
+  verify  [<commit>] [--allowed-signers f] [--allow-unsigned] [--json]
+                                       check a commit's attestation: signature, commit, tree
   status                               ledger, entry bar and mode per lane
+  savings [--lane l] [--json]          what reuse would have saved so far (from the shadow
+                                       log, so it shows value before the entry bar is met)
+  report-card [--lane l] [--json] [--out file]
+                                       miss rate with a 95% interval, hole exposure, audit
+                                       cost, Red Reader and Conductor scores, from the logs
   sync    [--remote <[user@]host:/abs/ledger>]
 
 Broker (one queue for the machine's CI work; see docs/design/broker.md):
@@ -108,12 +127,18 @@ try {
   else if (cmd === 'ingest') ingest(o);
   else if (cmd === 'report') report(o);
   else if (cmd === 'status') status();
+  else if (cmd === 'savings') printSavings(o);
+  else if (cmd === 'report-card') (await import('./evidence.mjs')).printCard(o);
   else if (cmd === 'sync') sync(o);
   else if (cmd === 'triage') triage(o);
   else if (cmd === 'full-done') fullDone(o);
   else if (cmd === 'replay') replay(o);
   else if (cmd === 'red') { const id = process.argv[4] && !process.argv[4].startsWith('--') ? process.argv[4] : undefined; (await import('./red.mjs')).red(process.argv[3], { ...o, _id: id }); }
   else if (cmd === 'deps') { const id = process.argv[4] && !process.argv[4].startsWith('--') ? process.argv[4] : undefined; (await import('./deps.mjs')).deps(process.argv[3], { ...o, _id: id }); }
+  else if (cmd === 'silence') process.exitCode = (await import('./silence.mjs')).silence(process.argv[3], o);
+  else if (cmd === 'attest') process.exitCode = (await import('./attest.mjs')).attestCli(o);
+  else if (cmd === 'verify') { const c = process.argv[3] && !process.argv[3].startsWith('--') ? process.argv[3] : undefined; process.exitCode = (await import('./attest.mjs')).verifyCli({ ...o, commit: c }); }
+  else if (cmd === 'train') process.exitCode = (await import('./train.mjs')).train(process.argv[3], o);
   else if (cmd === 'conductor') (await import('./conductor.mjs')).conductor(process.argv[3], o);
   else if (cmd === 'run') process.exitCode = runLane(o, rest);
   else if (cmd === 'lease') process.exitCode = await (await import('./broker/client.mjs')).lease(o, rest);

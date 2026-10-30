@@ -5,6 +5,9 @@
 // git root), a bare `vitest` / `npm test` outside a broker lease is blocked with
 // the command to use instead, so it queues with everything else.
 //
+// It also blocks the commands that record a PERSON's decision: `tracegate silence
+// allow` and `tracegate triage`.
+//
 // It blocks nothing else: commands that already go through `tracegate`, a run
 // inside a lease (TRACEGATE_LEASE is set), repositories without Tracegate, and
 // TRACEGATE_HOOK=off all pass. Any error in the hook lets the command through:
@@ -17,9 +20,19 @@ import path from 'node:path';
 // or exec), or a package manager's `test` script.
 const TEST_CMD = /(^|[;&|(]\s*|\benv\s+(?:\w+=\S*\s+)*|^\s*(?:\w+=\S*\s+)+)(?:(?:npx|bunx|pnpm\s+(?:exec|dlx)|yarn(?:\s+exec)?|bun\s+x)\s+(?:--\S+\s+)*)?vitest\b|(^|[;&|(]\s*)(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test\b/;
 
+// Decisions only a person may make: allowing a silenced test (src/silence.mjs) and
+// triaging a miss. An agent may record an opinion (`red annotate`), never these.
+const PERSON_ONLY = /\btracegate\s+(?:silence\s+allow|triage)\b/;
+
 /** The reason to block a command, or null to let it run. */
 export function verdict(command, { cwd, env = process.env, hasTracegate } = {}) {
-  if (env.TRACEGATE_HOOK === 'off' || env.TRACEGATE_LEASE) return null;
+  if (env.TRACEGATE_HOOK === 'off') return null;
+  if (typeof command === 'string' && PERSON_ONLY.test(command)) {
+    return `\`${command.trim()}\` records a person's decision (allowing a test to stop running, or triaging a miss), so an agent must not run it.
+Tell the user what you found and ask them to run it themselves if they agree. If you think a red is a flake, record that as an opinion instead:
+  npx tracegate red annotate <packet id> --verdict flake-suspect --escalate false --confidence … --reasons "…"`;
+  }
+  if (env.TRACEGATE_LEASE) return null;
   if (typeof command !== 'string' || !TEST_CMD.test(command)) return null;
   if (/\btracegate\b/.test(command)) return null;
   if (!(hasTracegate ?? repoUsesTracegate)(cwd)) return null;

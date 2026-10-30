@@ -36,6 +36,28 @@ jobs:
       - run: npm ci
       - run: npm run test:vitest-matrix
 
+  # The same end-to-end on examples/sample-repo-jest (Jest 30, babel-jest), seam strictly mapped.
+  e2e-jest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run test:e2e-jest
+
+  # Tracegate vs Vitest recordDependencies on the same commits; every selection is asserted.
+  compare-vitest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run test:compare
+
   pack:
     runs-on: ubuntu-latest
     steps:

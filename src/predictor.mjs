@@ -23,12 +23,12 @@
 import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { createRequire } from 'node:module';
 import path from 'node:path';
 import { ctx, git, lane, lockfileOf, isTestFile, isTsFile, vitestTested, vitestVersion, FP_VERSION } from './config.mjs';
 import { depsBar, depsOnlyPackageJson, lockDiff, repoKey } from './deps.mjs';
 import { model } from './model.mjs';
 import { ModuleMap } from './recorder.mjs';
+import { runnerOf } from './runners/index.mjs';
 import {
   appendTsv, dropFps, getBlob, ledgerDir, putBlob, readFps, readTsv, writeFp,
   DEPS_HEADER, FULL_HEADER, MISSES_HEADER, REASONS_HEADER, SHADOW_HEADER, TRIAGE_HEADER,
@@ -60,20 +60,15 @@ export function lockHashAt(laneName, commit) {
   try { return hash16(execFileSync('git', ['-C', ctx().root, 'show', `${commit}:${f}`], { maxBuffer: 1 << 28, stdio: ['ignore', 'pipe', 'ignore'] })); } catch { return 'none'; }
 }
 
-// The lane's test files, from VITEST ITSELF. A hand-written pattern was wrong
+// The lane's test files, from THE RUNNER ITSELF (src/runners/). A hand-written pattern was wrong
 // twice in practice (it missed whole test directories), and under enforce a file
 // the selector does not know about would never run at all. If this fails,
 // select fails, and the lane runs whole.
 export function allTestFiles(ln) {
   if (process.env.TRACEGATE_TEST_LIST) return process.env.TRACEGATE_TEST_LIST.split('\n').filter(Boolean);
-  const laneAbs = path.join(ctx().root, ln.dir);
-  const vitestBin = path.join(path.dirname(createRequire(path.join(laneAbs, 'package.json')).resolve('vitest/package.json')), 'vitest.mjs');
-  const out = execFileSync(process.execPath, [vitestBin, 'list', '--filesOnly', '--json'], {
-    cwd: laneAbs, encoding: 'utf8', maxBuffer: 1 << 28, stdio: ['ignore', 'pipe', 'ignore'],
-    env: { ...process.env, TRACEGATE_RECORD: '' },
-  });
-  const files = JSON.parse(out.slice(out.indexOf('['))).map((e) => path.relative(ctx().root, fs.realpathSync.native(e.file)).split(path.sep).join('/'));
-  if (!files.length) throw new Error(`vitest listed no test files in ${ln.dir || '.'}`);
+  const r = runnerOf(ln);
+  const files = r.list(ln).map((f) => path.relative(ctx().root, fs.realpathSync.native(f)).split(path.sep).join('/'));
+  if (!files.length) throw new Error(`${r.name} listed no test files in ${ln.dir || '.'}`);
   return files;
 }
 
@@ -87,7 +82,7 @@ export function ingest(o) {
   const dirty = git('status', '--porcelain', '--untracked-files=no').trim();
   if (dirty) { console.log(`tracegate ingest (${ln.name}): working tree has uncommitted changes — nothing recorded.`); return { recorded: 0, refused: 'dirty' }; }
   if (o['expect-head'] && o['expect-head'] !== true && o['expect-head'] !== H) { console.log(`tracegate ingest (${ln.name}): HEAD moved during the run — nothing recorded.`); return { recorded: 0, refused: 'moved' }; }
-  const results = loadResults(run);
+  const results = loadResults(run, ln);
   const rawDir = path.join(run, 'raw');
   const raws = fs.existsSync(rawDir) ? fs.readdirSync(rawDir).filter((f) => f.endsWith('.json')) : [];
   const lock = lockHash(ln.name);
@@ -253,16 +248,14 @@ export function seamShare(run) {
   return { mapped, unmapped };
 }
 
-/** Per-file verdicts from vitest's JSON reporter (`<run>/results.json`). */
-export function loadResults(run) {
+/** Per-file verdicts from the runner's JSON results (`<run>/results.json`). */
+export function loadResults(run, ln = null) {
   const out = new Map();
   let j; try { j = JSON.parse(fs.readFileSync(path.join(run, 'results.json'), 'utf8')); } catch { return out; }
   const root = ctx().root;
-  for (const r of j.testResults ?? []) {
+  for (const r of runnerOf(ln ?? { runner: 'vitest' }).parseResults(j)) {
     let name = r.name; try { name = fs.realpathSync.native(name); } catch { /* as reported */ }
-    const relp = path.relative(root, name).split(path.sep).join('/');
-    const failed = r.status === 'failed' || (r.assertionResults ?? []).some((a) => a.status === 'failed');
-    out.set(relp, { status: failed ? 'failed' : r.status === 'passed' ? 'passed' : r.status, durationMs: Math.max(0, (r.endTime ?? 0) - (r.startTime ?? 0)) });
+    out.set(path.relative(root, name).split(path.sep).join('/'), { status: r.status, durationMs: r.durationMs });
   }
   return out;
 }
@@ -555,8 +548,8 @@ export function report(o) {
   const ln = lane(o.lane);
   const run = o.run; if (!run || run === true) throw new Error('--run <dir> is required');
   let pred; try { pred = JSON.parse(fs.readFileSync(path.join(run, 'predict.json'), 'utf8')); } catch { console.log(`tracegate report (${ln.name}): no prediction for this run.`); return null; }
-  const results = loadResults(run);
-  let total = 0, reusable = 0, audited = 0, totalMs = 0, runMs = 0;
+  const results = loadResults(run, ln);
+  let total = 0, reusable = 0, audited = 0, totalMs = 0, runMs = 0, savedMs = 0;
   const misses = [];
   for (const [f, d] of Object.entries(pred.decisions)) {
     const r = results.get(f);
@@ -565,10 +558,12 @@ export function report(o) {
     if (d.run) { runMs += ms; continue; }
     reusable++;
     if (d.audit) audited++;
-    if (r && r.status === 'failed') misses.push(f);
+    // A MISS is a hole, not a saving: its time never counts as reusable.
+    if (r && r.status === 'failed') misses.push(f); else savedMs += ms;
   }
   const share = totalMs ? (100 * runMs / totalMs).toFixed(1) : '0.0';
-  appendTsv('shadow-', SHADOW_HEADER, [new Date().toISOString(), ln.name, pred.mode, pred.head.slice(0, 12), total, total - reusable, reusable, audited, share, misses.length]);
+  const sec = (ms) => (ms / 1000).toFixed(3);
+  appendTsv('shadow-', SHADOW_HEADER, [new Date().toISOString(), ln.name, pred.mode, pred.head.slice(0, 12), total, total - reusable, reusable, audited, share, misses.length, sec(totalMs), sec(savedMs)]);
   // Any file that failed here must run next time, whatever happens to ingest.
   for (const [f, r] of results) if (r.status === 'failed') dropFps(ln.name, f);
   for (const m of misses) appendTsv('misses-', MISSES_HEADER, [new Date().toISOString(), ln.name, pred.head.slice(0, 12), m, pred.decisions[m].reason]);
@@ -596,6 +591,53 @@ export function report(o) {
     console.log(`tracegate (${ln.name}): 0 misses.`);
   }
   return { total, reusable, audited, misses, head: pred.head, mode: pred.mode };
+}
+
+// ── savings: what reuse would have saved, from day one ───────────────────────
+// Read from the shadow log alone, so it shows value while the entry bar is still
+// being met. `reusable_s` (written since v0.7.0) is the test time of the files
+// whose verdict was reusable and did not then fail; an older row without it is
+// counted in files only. The projection keeps the audit: at rate a, a fraction a
+// of the reusable time still runs.
+export function savings(o = {}) {
+  const c = ctx();
+  const lanes = o.lane && o.lane !== true ? [lane(o.lane).name] : Object.keys(c.lanes);
+  const rows = readTsv('shadow-');
+  const out = [];
+  for (const name of lanes) {
+    const mine = rows.filter((r) => r.lane === name && (r.mode === 'shadow' || r.mode === 'enforce'));
+    const b = entryBar(name);
+    const s = { lane: name, runs: mine.length, files: 0, reusableFiles: 0, misses: 0, timedRuns: 0, totalS: 0, reusableS: 0 };
+    for (const r of mine) {
+      s.files += Number(r.files) || 0; s.reusableFiles += Number(r.reusable) || 0; s.misses += Number(r.misses) || 0;
+      if (r.reusable_s === undefined || r.reusable_s === '') continue;
+      s.timedRuns++; s.totalS += Number(r.total_s) || 0; s.reusableS += Number(r.reusable_s) || 0;
+    }
+    s.totalS = +s.totalS.toFixed(3); s.reusableS = +s.reusableS.toFixed(3);
+    s.auditRate = b.auditRate;
+    s.projectedS = +(s.reusableS * (1 - b.auditRate)).toFixed(3);
+    s.projectedPct = s.totalS ? +(100 * s.projectedS / s.totalS).toFixed(1) : null;
+    s.entryBar = { ok: b.ok, observationsLeft: Math.max(0, b.bar.observations - b.observations), daysLeft: +Math.max(0, b.bar.days - b.spanDays).toFixed(1), recentMiss: b.recentMiss };
+    out.push(s);
+  }
+  return out;
+}
+// One unit for the whole line, chosen by the total.
+const timeIn = (total) => (total >= 90 ? (x) => `${(x / 60).toFixed(1)} min` : total >= 1 ? (x) => `${x.toFixed(1)} s` : (x) => `${Math.round(x * 1000)} ms`);
+export function savingsLine(s) {
+  const mins = timeIn(s.totalS);
+  const bar = s.entryBar.ok ? 'entry bar met'
+    : s.entryBar.recentMiss ? 'entry bar held by a recent MISS'
+    : `entry bar in ${s.entryBar.observationsLeft} observation(s) and ${s.entryBar.daysLeft} day(s)`;
+  if (!s.runs) return `tracegate (${s.lane}): no observed runs yet.`;
+  const time = s.timedRuns ? ` — ${mins(s.reusableS)} of ${mins(s.totalS)} test time; at a ${Math.round(s.auditRate * 100)}% audit enforce would have saved ${mins(s.projectedS)} (${s.projectedPct ?? 0}%)` : '';
+  return `tracegate (${s.lane}): over ${s.runs} run(s), ${s.reusableFiles} of ${s.files} file runs could have reused a verdict${time}; ${s.misses} miss(es); ${bar}.`;
+}
+export function printSavings(o = {}) {
+  const all = savings(o);
+  if (o.json) { console.log(JSON.stringify(all, null, 2)); return all; }
+  for (const s of all) console.log(savingsLine(s));
+  return all;
 }
 
 // ── triage: record a verdict on a miss ───────────────────────────────────────

@@ -63,6 +63,9 @@ export const DEFAULTS = Object.freeze({
   deps: { mode: 'auto', bar: { runs: 3, days: 1 } },
   // Phase 2: fail-first ordering. `shadow` scores it; `order` hands vitest the order.
   conductor: { mode: 'shadow' },
+  // Silence guard: a change that skips, focuses or deletes tests. `shadow` logs it;
+  // `enforce` makes the run red until a person allows it (src/silence.mjs).
+  silence: { mode: 'shadow', base: 'main' },
 });
 
 // Inputs every test in a lane depends on. A change to any of them runs the whole
@@ -112,6 +115,7 @@ function buildLane(name, raw, cfg) {
     global: new RegExp(`(${[...laneGlobals, ...rootGlobals].join('|')})`),
     bar,
     lockfile: raw.lockfile ?? null,
+    runner: raw.runner ?? 'vitest',
     replayExclude: (raw.replayExclude ?? []).map((g) => new RegExp('^' + (dir ? `${dir}/` : '') + patternSource(g))),
   };
 }
@@ -153,6 +157,7 @@ export function ctx() {
     red: { ...DEFAULTS.red, ...(cfg.red ?? {}), ...(process.env.TRACEGATE_RED_ESCALATE ? { escalate: process.env.TRACEGATE_RED_ESCALATE !== 'off' } : {}) },
     deps: { ...DEFAULTS.deps, ...(cfg.deps ?? {}), bar: { ...DEFAULTS.deps.bar, ...(cfg.deps?.bar ?? {}) }, ...(process.env.TRACEGATE_DEPS ? { mode: process.env.TRACEGATE_DEPS } : {}) },
     conductor: { ...DEFAULTS.conductor, ...(cfg.conductor ?? {}), ...(process.env.TRACEGATE_CONDUCTOR ? { mode: process.env.TRACEGATE_CONDUCTOR } : {}) },
+    silence: { ...DEFAULTS.silence, ...(cfg.silence ?? {}), ...(process.env.TRACEGATE_SILENCE ? { mode: process.env.TRACEGATE_SILENCE } : {}) },
   };
   return _ctx;
 }
@@ -194,4 +199,23 @@ export function lockfileOf(ln, exists = (p) => fs.existsSync(path.join(ctx().roo
   if (ln.lockfile) return rel(ln.lockfile);
   for (const base of ln.dir ? [ln.dir, ''] : ['']) for (const f of LOCKFILES) { const p = rel(base, f); if (exists(p)) return p; }
   return null;
+}
+
+/**
+ * The lane a runner's worker records for: `TRACEGATE_LANE` when set (`tracegate
+ * run` sets it), else the lane whose directory is the working directory, else
+ * the only lane. Returns what the recorder needs: { repoRoot, srcPrefix }.
+ */
+export function laneTarget() {
+  const c = ctx();
+  const lanes = Object.values(c.lanes);
+  let ln = null;
+  if (process.env.TRACEGATE_LANE) ln = c.lanes[process.env.TRACEGATE_LANE];
+  if (!ln) {
+    let cwd = process.cwd(); try { cwd = fs.realpathSync.native(cwd); } catch { /* as is */ }
+    const here = path.relative(c.root, cwd).split(path.sep).join('/');
+    ln = lanes.find((l) => l.dir === here) ?? (lanes.length === 1 ? lanes[0] : null);
+  }
+  if (!ln) throw new Error(`tracegate: cannot tell which lane ${process.cwd()} is; set TRACEGATE_LANE`);
+  return { repoRoot: c.root, srcPrefix: ln.srcPrefix };
 }

@@ -31,11 +31,21 @@ test runs on this machine so they do not starve each other.
 - A red run leaves a packet: `npx tracegate red list` and `red show <id>`, or the
   `red_runs` / `read_red` MCP tools.
 
+## Landing changes
+
+- If the repository lands through the merge train, queue your branch with
+  `npx tracegate train add --pr <id>=<branch>` (or the `train_add` MCP tool) and let a
+  person or the gate run `tracegate train run`. Don't merge into the target yourself.
+- `npx tracegate train status` (or `train_status`) shows what is queued, landed and
+  rejected, and why.
+
 ## What you must not do
 
 - Don't turn a red into a green by editing tests. That includes adding `.skip`, `.only` or
   `.todo`, deleting a test, loosening an assertion, or raising a timeout. Fix the code,
-  or report that you could not.
+  or report that you could not. The silence guard reports skipped, focused and deleted
+  tests on every run (`npx tracegate silence check`), and in enforce mode it keeps the
+  run red. Only a person can allow one (`tracegate silence allow`); don't run it, ask.
 - Don't triage a failure as `flake` yourself. Only a person records triage
   (`tracegate triage`). Passing when re-run alone is not proof of a flake.
 - If you have read the code and believe a red is real, say so. The `red-reader` subagent
