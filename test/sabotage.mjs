@@ -382,6 +382,19 @@ const WITNESSES = [
   ['jest-select-by-path', 'src/runners/jest.mjs',
     "(files.length ? ['--runTestsByPath', ...files] : [])", 'files',
     'a selection is passed by path, never as patterns', 'jest.mjs'],
+  // v0.9.1: TypeScript 7 has no JS parser; uncommitted changes are what the tests run on.
+  ['ts-needs-parser-api', 'src/model.mjs',
+    'if (usable(m)) return { ts: m, name, version };', 'if (m) return { ts: m, name, version };',
+    'TypeScript 7 is refused with the alias install as the fix', 'onboarding.mjs'],
+  ['ts-alias-first', 'src/model.mjs',
+    "for (const name of [TS_ALIAS, 'typescript'])", "for (const name of ['typescript', TS_ALIAS])",
+    'an alias installed for Tracegate wins over a usable typescript beside it', 'onboarding.mjs'],
+  ['doctor-checks-parser', 'src/init.mjs',
+    'if (f.ts) say(OK,', 'if (true) say(OK,',
+    'doctor fails a lane on TypeScript 7 instead of passing it because it resolves', 'onboarding.mjs'],
+  ['select-sees-uncommitted', 'src/predictor.mjs',
+    "if (!git('status', '--porcelain', '--untracked-files=no').trim()) return { head: H, at: H, dirty: false };", "return { head: H, at: H, dirty: false };",
+    'an UNCOMMITTED edit to a function the test ran makes it run in enforce', 'selftest.mjs'],
 ];
 
 // A broken rule can make a check wait forever, and a test blocked in spawnSync

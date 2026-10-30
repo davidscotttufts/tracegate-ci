@@ -56,12 +56,11 @@ met its own bar. An oracle for the remaining cases runs in shadow only. See
 **Phase 0.5c is done: a make jobserver** per lease (`lease --jobserver`), so make,
 Ninja and cargo children stay within the grant.
 
-**Version 0.6.0: ready to install.**
-- `tracegate init` and `tracegate doctor` (see [Quick start](#quick-start)).
-- A Claude Code plugin (see [Claude Code plugin](#claude-code-plugin)).
-- A Vitest version matrix in CI covering 4.1 to 5.x.
-
-The npm release is pending.
+**On npm as [`tracegate-ci`](https://www.npmjs.com/package/tracegate-ci)** (see
+[CHANGELOG.md](CHANGELOG.md)):
+- `tracegate init` and `tracegate doctor` (see [Quick start](#quick-start));
+- a Claude Code plugin (see [Claude Code plugin](#claude-code-plugin));
+- Vitest 4.1 to 5.x and Jest 30, each run end to end in CI.
 
 ## The idea in one paragraph
 
@@ -82,7 +81,14 @@ and the model gets no tools and no credentials.
     (`npm run test:vitest-matrix`) and on a Jest copy of the sample (`npm run test:e2e-jest`).
   - A runner that moves the seam degrades to *safe*. `tracegate doctor --canary` tells you
     when that has happened.
-- `typescript` installed in the target repository (used to parse source files).
+- TypeScript **5 or 6** installed in the target repository (used to parse source files).
+  - TypeScript 7 is the native compiler, and its npm package has no JS parser API.
+    A repository on 7 keeps it, and installs 6 beside it under the name Tracegate looks
+    for first:
+    `npm i -D tracegate-typescript@npm:typescript@6`. `tracegate doctor` says which one it
+    parses with.
+- npm 10.9 can crash installing Vitest 4 (`Cannot read properties of null (reading
+  'edgesOut')`). That is an npm bug, not Tracegate's; `--legacy-peer-deps` avoids it.
 
 ## Quick start
 
@@ -620,6 +626,11 @@ H touches a global input, the test file, a non-source module it loaded, an execu
 function, a constant its code names, a top-level statement of a module it loaded, a
 module that could not be mapped, or a path it read or listed.
 
+**Uncommitted changes count.** With edits to tracked files not yet committed, H is the
+working tree: `select` snapshots it as a commit with `git stash create`, which writes no
+ref and no stash entry, and predicts against that. Such a run records no footprints, no
+full run and no attestation evidence: none of them can name a commit that was tested.
+
 Changes are attributed **per character** to their owner: the innermost function, or the
 kind of top-level statement (import/type → ignored; plain-data `const X` → a constant;
 anything else → top level). Anonymous callbacks are keyed by callee and first string
@@ -658,6 +669,18 @@ selections under enforce, each from the recorded commit:
 | `whisper()` body (no test runs it) | nothing |
 | `add()` body | `add.test.ts`, `report.test.ts` (`formatTotal` calls `add`) |
 | `data/rates.json` (read at run time by one test) | `rates.test.ts` |
+| `add()` body, left uncommitted | `add.test.ts`, `report.test.ts`; nothing is recorded |
+
+`TYPESCRIPT_VERSION=7 TS_ALIAS_VERSION=6 npm run test:e2e` runs the same on a repository
+on TypeScript 7, parsing with 6 installed under the alias (a CI job).
+
+## Releasing
+
+A pushed tag `vX.Y.Z` (matching `package.json`) runs `.github/workflows/release.yml`: the
+tests, the sabotage run, then `npm stage publish` through npm Trusted Publishing (OIDC, no
+token). The version goes live only when a maintainer approves it with 2FA, on npmjs.com or
+with `npm stage list` / `npm stage approve <id>` (npm 11.15 or later). Then
+`mcp-publisher publish` updates the MCP Registry entry from `server.json`.
 
 ## License
 

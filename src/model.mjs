@@ -24,15 +24,39 @@ import { TOOL_DIR, ctx } from './config.mjs';
 // `triage` and `sync` work in a checkout with no install at all. The target
 // repository's own TypeScript is preferred (a lane's, then the root's), then
 // this package's.
+//
+// Only TypeScript 5 and 6 carry the JS compiler API (`createSourceFile`).
+// TypeScript 7 is the native compiler, and its package exports no parser, so
+// a repository on 7 installs 6 beside it under TS_ALIAS for Tracegate alone;
+// the alias wins over `typescript` wherever both resolve.
+export const TS_ALIAS = 'tracegate-typescript';
+export const TS_FIX = `npm i -D ${TS_ALIAS}@npm:typescript@6`;
+const usable = (m) => typeof m?.createSourceFile === 'function';
+/** The TypeScript the predictor would parse with from `base`: {ts, name, version} or {why}. */
+export function findTypescript(base) {
+  const req = createRequire(path.join(base, 'package.json'));
+  let unusable = null;
+  for (const name of [TS_ALIAS, 'typescript']) {
+    let m;
+    try { m = req(name); } catch { continue; }
+    const version = m?.version ?? (m?.default?.version) ?? '?';
+    if (usable(m)) return { ts: m, name, version };
+    unusable ??= `${name} ${version} has no JS parser API (TypeScript 7 is the native compiler; Tracegate parses with 5 or 6): ${TS_FIX}`;
+  }
+  return { why: unusable ?? `no TypeScript install found (install \`typescript\` 5 or 6, or ${TS_FIX})` };
+}
 let _ts = null;
 const tsLib = () => {
   if (_ts) return _ts;
   let bases = [];
   try { const c = ctx(); bases = [...Object.values(c.lanes).map((l) => path.join(c.root, l.dir)), c.root]; } catch { /* no repo */ }
+  let first = null;
   for (const base of [...bases, TOOL_DIR]) {
-    try { return (_ts = createRequire(path.join(base, 'package.json'))('typescript')); } catch { /* next */ }
+    const f = findTypescript(base);
+    if (f.ts) return (_ts = f.ts);
+    if (!first || f.why.includes('parser API')) first = f.why; // an unusable install says more than a missing one
   }
-  throw new Error('tracegate: no TypeScript install found (install `typescript` in the target repository)');
+  throw new Error(`tracegate: ${first}`);
 };
 export const ts = new Proxy({}, { get: (_t, k) => tsLib()[k] });
 

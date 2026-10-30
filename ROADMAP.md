@@ -537,12 +537,43 @@ allow is pinned to the file.
 A stale witness anchor (`hook-lets-leases-through`, broken by the Milestone 3 hook change)
 was found by an anchor check and fixed.
 
-### v1.0 criteria (status 2026-10-29)
+### Release 0.9.1: first contact (done 2026-10-30)
+
+**Why.** 0.9.0 was published to npm and then installed the way a new user would: a fresh
+Vitest project, `npm i -D tracegate-ci`, `init`, `doctor --canary`, `run`. Three problems
+surfaced that no test had covered, because the samples pin TypeScript 5.9 and the tests
+always ran on committed trees.
+
+**Corrections:**
+- **Uncommitted changes were invisible to selection.** `select` diffed footprints against
+  HEAD, so in enforce an uncommitted edit to `add()` ran 0 of 2 files and passed. That is
+  the ordinary case for an agent iterating before it commits. `select` now predicts
+  against a `git stash create` snapshot of the working tree.
+- **A run on uncommitted changes counted as evidence about HEAD:** a full-run row (which
+  sets the 24 h full-run clock and bounds exposure in the report card) and a green row
+  `attest` could sign. Both now need a run of exactly HEAD's tree: clean at the start and
+  the end, HEAD unmoved.
+- **TypeScript 7 broke parsing.** `typescript@latest` is the native compiler, whose package
+  has no `createSourceFile`. `run` crashed after the tests, recording nothing, and
+  `doctor` passed it. Tracegate now parses with 5 or 6 only, looks for 6 under the alias
+  `tracegate-typescript` first, and `doctor` fails a lane it cannot parse for. Porting the
+  parser to TypeScript 7's `typescript/unstable/*` API waits for that API to be stable.
+- `server.json`'s description was 119 characters; the MCP Registry allows 100.
+
+**Release path:** npm Trusted Publishing with `npm stage publish`; a maintainer approves
+each version with 2FA. The `NPM_TOKEN` secret in Milestone 1's notes is retired.
+
+**Tests:** 3 self-test and 8 onboarding checks, 4 sabotage witnesses, the e2e's
+uncommitted-change scenario, and a CI job on TypeScript 7 with the alias. The dirty-tree
+rule in `run.mjs` (no full run, no green row) is asserted by the e2e only: `runLane` has
+no unit harness, so it has no sabotage witness.
+
+### v1.0 criteria (status 2026-10-30)
 
 - [x] CLI and MCP surface documented (README, `tracegate --help`, MCP tool descriptions).
 - [ ] Report-card data from the host project published (`docs/evidence/`): the owner
       runs `tracegate report-card` there and decides what to publish.
-- [ ] At least two external repositories using it: needs the npm release first.
+- [ ] At least two external repositories using it: on npm since 0.9.0 (2026-10-30).
 - [x] §5 open questions answered where this work could answer them: Jest is supported;
       the published metric is both the per-verdict miss rate with its interval and the hole
       exposure bound (Milestone 2).

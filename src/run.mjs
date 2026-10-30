@@ -44,6 +44,8 @@ export function runLane(o, userArgs) {
   const mode = o.mode && o.mode !== true ? o.mode : effectiveMode(ln.name);
   if (mode === 'off') return vitest(ln, userArgs, { TRACEGATE_RECORD: '' });
   const headAtStart = head();
+  // Uncommitted changes to tracked files: this run tests a tree no commit names.
+  const dirtyAtStart = git('status', '--porcelain', '--untracked-files=no').trim() !== '';
   const run = o.run && o.run !== true ? path.resolve(o.run) : fs.mkdtempSync(path.join(os.tmpdir(), `tracegate-${ln.name}-`));
   let sel;
   try {
@@ -129,17 +131,21 @@ export function runLane(o, userArgs) {
     try { const p = writePacket({ lane: ln.name, run, base: o.base, rechecks, silenced: silenced?.findings?.length ? silenced.findings : null }); console.log(`tracegate (${ln.name}): red packet ${p.id} — an agent can read it with \`tracegate red show ${p.id}\` or the MCP tool read_red.`); }
     catch (e) { console.log(`tracegate (${ln.name}): could not write the red packet (${e.message}); the run is red either way.`); }
   }
-  ingest({ lane: ln.name, run, 'expect-head': headAtStart });
+  const ing = ingest({ lane: ln.name, run, 'expect-head': headAtStart });
+  // Only a run of exactly HEAD's tree is evidence about HEAD: clean when it
+  // started and when it ended (ingest's own check), and HEAD unmoved.
+  const exact = !dirtyAtStart && !ing?.refused && head() === headAtStart;
   // A complete full run: the whole lane ran (shadow) and every listed file passed.
   if (rc === 0 && mode === 'shadow' && sel.files > 0) {
     const pred = JSON.parse(fs.readFileSync(path.join(run, 'predict.json'), 'utf8'));
     const all = Object.keys(pred.decisions).every((f) => results.get(f)?.status === 'passed');
-    if (all && head() === headAtStart) fullDone({ lane: ln.name });
+    if (all && exact) fullDone({ lane: ln.name });
+    else if (all) console.log(`tracegate (${ln.name}): not recorded as a full run — the tree was not exactly HEAD's (uncommitted changes, or HEAD moved).`);
   }
   // Day-one value: what reuse would have saved so far, while still in shadow.
   if (mode === 'shadow') { try { console.log(savingsLine(savings({ lane: ln.name })[0])); } catch { /* evidence only */ } }
   // A green run at an unmoved tree is evidence `tracegate attest` can sign (attest.mjs).
-  if (rc === 0 && rep && head() === headAtStart) {
+  if (rc === 0 && rep && exact) {
     try { recordGreen({ lane: ln.name, mode, head: rep.head, rep }); } catch { /* evidence only */ }
   }
   if (!o.run) fs.rmSync(run, { recursive: true, force: true });

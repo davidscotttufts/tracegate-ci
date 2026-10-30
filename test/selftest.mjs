@@ -268,6 +268,20 @@ g('checkout', '-q', '--detach', C1);
   check('enforce + audit 0.5: about half of 100 selections audit the file (25..75)', audited >= 25 && audited <= 75, `audited ${audited}/100`);
   fs.rmSync(r0, { recursive: true, force: true });
 }
+// ── uncommitted changes: the tests run on the working tree, so predict against it ──
+{
+  const sel = (label) => { const r = tmpRun(); tg.select({ lane: 'api', run: r, mode: 'enforce', audit: '0' }); const d = JSON.parse(fs.readFileSync(path.join(r, 'predict.json'), 'utf8')).decisions[TEST]; fs.rmSync(r, { recursive: true, force: true }); return d; };
+  const orig = fs.readFileSync(path.join(repo, SRC), 'utf8');
+  w(SRC, base.replace('TABLE.length + helper()', 'TABLE.length + helper() + 1'));
+  const ran = sel();
+  check('an UNCOMMITTED edit to a function the test ran makes it run in enforce', ran.run === true && /executed function/.test(ran.reason), JSON.stringify(ran));
+  w(SRC, base.replace('return 42;', 'return 43;'));
+  const idle = sel();
+  check('...an uncommitted edit to a function it never ran still reuses its verdict', idle.run === false, JSON.stringify(idle));
+  check('...and the snapshot leaves no stash entry and no ref', g('stash', 'list').trim() === '' && g('status', '--porcelain', '--untracked-files=no').trim() !== '');
+  w(SRC, orig);
+  check('...a clean tree predicts against HEAD itself', tg.treeUnderTest().at === tg.head() && sel().reason === 'green at this commit', JSON.stringify(tg.treeUnderTest()));
+}
 const er = tmpRun();
 tg.select({ lane: 'api', run: er, mode: 'enforce', audit: '1' });
 const pred = JSON.parse(fs.readFileSync(path.join(er, 'predict.json'), 'utf8'));

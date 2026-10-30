@@ -44,6 +44,22 @@ export const showAt = (commit, p) => { try { return git('show', `${commit}:${p}`
 export const fpsFor = (ln, testFile) => readFps(ln, testFile, REPLAY.at);
 
 export const head = () => git('rev-parse', 'HEAD').trim();
+/**
+ * The commit a selection predicts against. With uncommitted changes to tracked
+ * files the tests run on the WORKING TREE, so that is what is compared: a commit
+ * of it from `git stash create`, which writes no ref and no stash entry. Untracked
+ * files need nothing: a new test has no footprint, and a new module is only
+ * loaded through a tracked file that changed. `at` is null when the snapshot
+ * fails (mid-merge, say): then nothing may be reused.
+ */
+export function treeUnderTest() {
+  const H = head();
+  if (!git('status', '--porcelain', '--untracked-files=no').trim()) return { head: H, at: H, dirty: false };
+  try {
+    const at = git('-c', 'user.name=tracegate', '-c', 'user.email=tracegate@localhost', 'stash', 'create').trim();
+    return { head: H, at: at || H, dirty: !!at };
+  } catch { return { head: H, at: null, dirty: true }; }
+}
 const hash16 = (buf) => crypto.createHash('sha256').update(buf).digest('hex').slice(0, 16);
 /** The lane's lockfile hash on the working tree ('none' without one). */
 export function lockHash(laneName) {
@@ -505,15 +521,16 @@ export function select(o) {
   const mode = o.mode && o.mode !== true ? o.mode : effectiveMode(ln.name);
   if (mode === 'shadow') { const d = modeDecision(ln.name); if (d.full) console.log(`tracegate (${ln.name}): running the FULL lane — ${d.why}.`); }
   const auditRate = o.audit === undefined ? entryBar(ln.name).auditRate : Number(o.audit);
-  const H = head(); const lock = lockHash(ln.name);
+  const T = treeUnderTest(); const H = T.head; const lock = lockHash(ln.name);
+  if (T.dirty) console.log(`tracegate (${ln.name}): uncommitted changes — ${T.at ? `predicting against the working tree (${T.at.slice(0, 9)})` : 'the working tree could not be snapshotted, so every file runs'}.`);
   _depsBar.clear();
   const files = allTestFiles(ln);
-  const out = { lane: ln.name, mode, head: H, at: new Date().toISOString(), auditRate, decisions: {} };
+  const out = { lane: ln.name, mode, head: H, ...(T.dirty ? { tree: T.at } : {}), at: new Date().toISOString(), auditRate, decisions: {} };
   const selected = [];
   const why = new Map();
   let reuse = 0, audit = 0;
   for (const f of files) {
-    let d; try { d = decide(f, H, process.version, lock, ln.name); } catch (e) { d = { run: true, reason: `predictor error: ${e.message}` }; }
+    let d; try { d = T.at ? decide(f, T.at, process.version, lock, ln.name) : { run: true, reason: 'uncommitted changes not snapshotted' }; } catch (e) { d = { run: true, reason: `predictor error: ${e.message}` }; }
     if (!d.run) {
       reuse++;
       // Uniform and independent of the prediction's reason, so the miss rate it
