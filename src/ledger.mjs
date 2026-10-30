@@ -10,6 +10,7 @@
 //   escalations-<host>.tsv  one row per Red Reader escalation of a MISS (Phase 1b)
 //   deps-<host>.tsv     one row per lockfile run: what the dependency rule would reuse, and how it went
 //   conductor-<host>.tsv  one row per red run: where fail-first put the first failure
+//   green-<host>.tsv    one row per green `tracegate run`: what `attest` signs
 //
 // It is a CACHE plus a LOG. Deleting `fp/` and `blobs/` is always safe and only
 // costs predictions. The .tsv logs are the evidence; never delete them. Logs are

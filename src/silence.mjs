@@ -25,6 +25,7 @@ import { appendTsv, readTsv } from './ledger.mjs';
 export const SILENCED_HEADER = ['at', 'lane', 'head', 'file', 'kind', 'count', 'blob', 'allowed', 'mode'];
 export const ALLOW_HEADER = ['at', 'lane', 'file', 'kind', 'blob', 'by'];
 const TEST = /\.(test|spec)\.[cm]?[jt]sx?$/;
+const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const KINDS = {
   skip: /\b(?:it|test|describe|suite|bench)(?:\.\w+)*\.(?:skip|todo|skipIf|runIf)\b|\bx(?:it|test|describe)\s*\(/g,
   only: /\b(?:it|test|describe|suite)(?:\.\w+)*\.only\b|\bf(?:it|describe)\s*\(/g,
@@ -59,7 +60,8 @@ export function baseFor(head, o = {}) {
   if (o.base && o.base !== true) return o.base;
   const target = ctx().silence.base;
   try { const mb = git('merge-base', head, target).trim(); if (mb && mb !== head) return mb; } catch { /* no such branch */ }
-  return `${head}^`;
+  try { git('rev-parse', '--verify', '--quiet', `${head}^`); return `${head}^`; } catch { return EMPTY_TREE; } // a root commit: everything is new
+
 }
 
 const blobAt = (head, file) => { try { return git('rev-parse', `${head}:${file}`).trim().slice(0, 12); } catch { return 'deleted'; } };

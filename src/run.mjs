@@ -1,6 +1,6 @@
 // `tracegate run --lane <l> [--mode m] [--run <dir>] -- <vitest args>`
 //
-// One recorded vitest run of a lane under Tracegate:
+// One recorded run of a lane under Tracegate (the lane's runner: src/runners/):
 //   1. mode     off → plain vitest, nothing recorded
 //   2. select   which files must run (a failure here runs the whole lane and records nothing)
 //   3. vitest   with the recorder on, the selection (under enforce) and a JSON reporter
@@ -14,32 +14,27 @@
 // vitest under conductor.mode `order`) and scored on a red run; a lockfile run
 // leaves a dependency packet for the oracle (Phases 2 and 3, both shadow).
 // The exit code is vitest's. Nothing here can turn a red run green.
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
-import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { rank, recentFailures, scoreOrder } from './conductor.mjs';
 import { ctx, git, lane, lockfileOf } from './config.mjs';
 import { lockDiff, writeDepsPacket } from './deps.mjs';
 import { effectiveMode, fullDone, head, ingest, loadResults, report, savings, savingsLine, select, triage } from './predictor.mjs';
 import { writePacket } from './red.mjs';
+import { runnerOf } from './runners/index.mjs';
+import * as vitestAdapter from './runners/vitest.mjs';
 import { guard } from './silence.mjs';
+import { recordGreen } from './attest.mjs';
 
-const REPORTER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'vitest-reporter.mjs');
-
-export function vitestBin(laneAbs) {
-  return path.join(path.dirname(createRequire(path.join(laneAbs, 'package.json')).resolve('vitest/package.json')), 'vitest.mjs');
-}
+export const vitestBin = vitestAdapter.bin;
 
 function vitest(ln, args, env) {
-  const laneAbs = path.join(ctx().root, ln.dir);
-  // Under a broker lease (`tracegate lease -- tracegate run …`), size vitest to the grant.
+  const r = runnerOf(ln);
+  // Under a broker lease (`tracegate lease -- tracegate run …`), size the runner to the grant.
   const tokens = Number(process.env.TRACEGATE_TOKENS);
-  const workers = Number.isInteger(tokens) && tokens > 0 && !args.some((a) => a.startsWith('--maxWorkers')) ? [`--maxWorkers=${tokens}`] : [];
-  const r = spawnSync(process.execPath, [vitestBin(laneAbs), 'run', ...workers, ...args], { cwd: laneAbs, stdio: 'inherit', env: { ...process.env, ...env } });
-  return r.status ?? 1;
+  const workers = Number.isInteger(tokens) && tokens > 0 && !r.hasWorkersArg(args) ? [r.workersArg(tokens)] : [];
+  return r.spawn(ln, [...workers, ...args], env);
 }
 
 export function runLane(o, userArgs) {
@@ -58,7 +53,7 @@ export function runLane(o, userArgs) {
     return vitest(ln, userArgs, { TRACEGATE_RECORD: '' });
   }
   const recEnv = { TRACEGATE_RECORD: run, TRACEGATE_ROOT: c.root, TRACEGATE_LANE: ln.name };
-  const reporters = ['--reporter=default', '--reporter=json', `--outputFile.json=${path.join(run, 'results.json')}`, `--reporter=${REPORTER}`];
+  const reporters = runnerOf(ln).recordArgs(run);
   // Phase 2: the fail-first order of what will run. It never changes the set.
   const cmode = c.conductor.mode;
   let order = null;
@@ -75,12 +70,12 @@ export function runLane(o, userArgs) {
     console.log(`tracegate: every ${ln.name} verdict is reusable at this tree — no file needs to run.`);
   } else {
     const files = mode === 'enforce' ? sel.selected.map((f) => path.join(c.root, f)) : [];
-    rc = vitest(ln, [...reporters, ...userArgs, ...files], recEnv);
+    rc = vitest(ln, [...reporters, ...userArgs, ...runnerOf(ln).filesArgs(files)], recEnv);
   }
-  const results = loadResults(run);
+  const results = loadResults(run, ln);
   const rawDir = path.join(run, 'raw');
   if (results.size && !(fs.existsSync(rawDir) && fs.readdirSync(rawDir).length)) {
-    console.log(`\x1b[33mtracegate: vitest ran but the recorder wrote nothing — add 'tracegate-ci/vitest-setup' to setupFiles when TRACEGATE_RECORD is set (see README).\x1b[0m`);
+    console.log(`\x1b[33mtracegate: ${runnerOf(ln).name} ran but the recorder wrote nothing — ${runnerOf(ln).setupHint}.\x1b[0m`);
   }
   const rep = report({ lane: ln.name, run });
   // A footprint hole is a deterministic function of the tree, so it fails again
@@ -89,7 +84,7 @@ export function runLane(o, userArgs) {
   const rechecks = {};
   for (const m of rep?.misses ?? []) {
     console.log(`tracegate (${ln.name}): re-running the MISS ${m} alone at ${rep.head.slice(0, 12)} …`);
-    const again = vitest(ln, [path.join(c.root, m)], { TRACEGATE_RECORD: '' });
+    const again = vitest(ln, runnerOf(ln).filesArgs([path.join(c.root, m)]), { TRACEGATE_RECORD: '' });
     rechecks[m] = again === 0 ? 'passed' : 'failed';
     if (again === 0) {
       triage({ lane: ln.name, file: m, head: rep.head.slice(0, 12), verdict: 'flake' });
@@ -143,6 +138,10 @@ export function runLane(o, userArgs) {
   }
   // Day-one value: what reuse would have saved so far, while still in shadow.
   if (mode === 'shadow') { try { console.log(savingsLine(savings({ lane: ln.name })[0])); } catch { /* evidence only */ } }
+  // A green run at an unmoved tree is evidence `tracegate attest` can sign (attest.mjs).
+  if (rc === 0 && rep && head() === headAtStart) {
+    try { recordGreen({ lane: ln.name, mode, head: rep.head, rep }); } catch { /* evidence only */ }
+  }
   if (!o.run) fs.rmSync(run, { recursive: true, force: true });
   return rc;
 }

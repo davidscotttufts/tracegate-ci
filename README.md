@@ -75,10 +75,12 @@ and the model gets no tools and no credentials.
 ## Requirements
 
 - Node.js ≥ 22, git.
-- Vitest 4.1 to 5.x.
-  - The recorder hooks the `vm.runInThisContext` seam Vitest uses to evaluate modules.
-  - CI runs the end-to-end against each supported version (`npm run test:vitest-matrix`).
-  - A Vitest that moves the seam degrades to *safe*. `tracegate doctor --canary` tells you
+- Vitest 4.1 to 5.x, or Jest 30.
+  - The recorder hooks the `vm` seam the runner evaluates modules through: Vitest's
+    `vm.runInThisContext`, Jest's `vm.compileFunction`.
+  - CI runs the end-to-end against each supported Vitest version
+    (`npm run test:vitest-matrix`) and on a Jest copy of the sample (`npm run test:e2e-jest`).
+  - A runner that moves the seam degrades to *safe*. `tracegate doctor --canary` tells you
     when that has happened.
 - `typescript` installed in the target repository (used to parse source files).
 
@@ -469,6 +471,56 @@ trains. Score the advice with `outcome`:
 - a pair called independent that was red only in combination is a false independence.
   That rate must be measured before anything relies on partitioning.
 
+## Jest
+
+A lane runs Jest when its config says so, and the Jest config loads the recorder as
+its test environment:
+
+```json
+{ "lanes": { "app": { "dir": ".", "src": "src", "runner": "jest" } } }
+```
+
+```js
+// jest.config.cjs
+module.exports = { testEnvironment: 'tracegate-ci/jest-environment' };
+```
+
+The environment extends the project's `jest-environment-node` and does nothing unless
+`tracegate run` is recording. Everything else is the same: selection, audits, misses, the
+broker, the train, the silence guard. Two differences:
+- Jest compiles each module again for every test file in a worker, and V8 reuses the
+  compiled script. The recorder therefore asks V8 for call counts under Jest, which costs
+  more than Vitest's cheapest coverage mode.
+- Jest records no runner packages, so a lockfile change runs every test that loaded a
+  package; the dependency rule never reuses a Jest verdict across one.
+
+`tracegate init` does not write Jest configs yet. `tracegate doctor --canary` checks a Jest
+lane. `examples/sample-repo-jest` is the Jest copy of the sample.
+
+## Attestation
+
+A signoff says a commit is green. An attestation says what was run on which tree, and
+is signed:
+
+```sh
+npx tracegate run                    # every green run at an unmoved tree is logged
+npx tracegate attest                 # sign what ran at HEAD, as a git note
+npx tracegate verify <commit>        # signature, commit and tree, and what ran
+git push origin refs/notes/tracegate # share the notes (not done for you)
+```
+
+- **The statement.** For each lane, it holds the mode and the files run, reused and
+  audited, with the Node version, the lockfile hash, the exact tree and a digest of the
+  ledger rows it came from.
+- **Every lane must be green.** Each lane needs a green `tracegate run` at that exact tree,
+  or nothing is attested.
+- **Signing.** It uses your git signing key (`gpg.format` ssh or openpgp,
+  `user.signingkey`). Without one, the attestation is stored unsigned and says so, and
+  `verify` rejects it unless given `--allow-unsigned`.
+- **Checking ssh signatures.** `verify` uses `gpg.ssh.allowedSignersFile`.
+- **GitHub.** `attest --status` also sets a GitHub commit status, as `gh signoff` does.
+  It is opt-in.
+
 ## Merge train
 
 `tracegate train` lands a queue of branches onto a target branch (default `main`):
@@ -585,11 +637,12 @@ Any change to an unmapped module means "run", so predictions stay safe but get c
 
 ```sh
 npm install                 # typescript, for parsing
-npm test                    # self-test, broker, adaptive capacity, Red Reader, dependency rule, Conductor, jobserver, onboarding, evidence, train, silence guard
+npm test                    # self-test, broker, adaptive capacity, Red Reader, dependency rule, Conductor, jobserver, onboarding, evidence, train, silence guard, attestation, Jest recorder
 node test/sabotage.mjs      # breaks each rule in a temp copy; each must turn the self-test red
 bash examples/e2e.sh        # end-to-end on examples/sample-repo (needs network for npm install)
 npm run test:vitest-matrix  # the end-to-end once per supported Vitest version, seam strictly mapped
 npm run test:compare        # Tracegate vs Vitest recordDependencies, every selection asserted
+npm run test:e2e-jest       # the end-to-end on examples/sample-repo-jest, seam strictly mapped
 ```
 
 The self-test asserts both directions on purpose: a predictor that always says "run" fails

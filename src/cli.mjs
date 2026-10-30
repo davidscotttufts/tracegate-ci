@@ -43,6 +43,12 @@ const USAGE = `usage: tracegate <command> [options]
   silence check [--lane l] [--base ref] [--json] | allow --file <f> [--kind k] --by <name>
                                        tests the change skipped, focused or deleted; allow is
                                        a person's decision (the Claude Code hook blocks agents)
+  attest  [--commit c] [--lane l] [--sign | --no-sign] [--key k] [--status]
+                                       sign what the green runs at a commit tested, as a
+                                       git note (refs/notes/tracegate); --status also sets a
+                                       GitHub commit status
+  verify  [<commit>] [--allowed-signers f] [--allow-unsigned] [--json]
+                                       check a commit's attestation: signature, commit, tree
   status                               ledger, entry bar and mode per lane
   savings [--lane l] [--json]          what reuse would have saved so far (from the shadow
                                        log, so it shows value before the entry bar is met)
@@ -130,6 +136,8 @@ try {
   else if (cmd === 'red') { const id = process.argv[4] && !process.argv[4].startsWith('--') ? process.argv[4] : undefined; (await import('./red.mjs')).red(process.argv[3], { ...o, _id: id }); }
   else if (cmd === 'deps') { const id = process.argv[4] && !process.argv[4].startsWith('--') ? process.argv[4] : undefined; (await import('./deps.mjs')).deps(process.argv[3], { ...o, _id: id }); }
   else if (cmd === 'silence') process.exitCode = (await import('./silence.mjs')).silence(process.argv[3], o);
+  else if (cmd === 'attest') process.exitCode = (await import('./attest.mjs')).attestCli(o);
+  else if (cmd === 'verify') { const c = process.argv[3] && !process.argv[3].startsWith('--') ? process.argv[3] : undefined; process.exitCode = (await import('./attest.mjs')).verifyCli({ ...o, commit: c }); }
   else if (cmd === 'train') process.exitCode = (await import('./train.mjs')).train(process.argv[3], o);
   else if (cmd === 'conductor') (await import('./conductor.mjs')).conductor(process.argv[3], o);
   else if (cmd === 'run') process.exitCode = runLane(o, rest);

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # End-to-end: Tracegate on examples/sample-repo, in a throwaway copy.
+# SAMPLE=sample-repo-jest runs the same scenarios on the Jest copy of it.
 #
 #   0. tracegate doctor --canary on it
 #   1. copy the sample to a temp dir, install it, commit it (a footprint names a commit)
@@ -18,8 +19,10 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/tracegate-e2e.XXXXXX")"
 WORK="$(cd "$WORK" && pwd -P)" # the tool reports realpaths
 [ "${KEEP:-}" = 1 ] || trap 'rm -rf "$WORK"' EXIT
 echo "== work dir: $WORK"
-rsync -a --exclude node_modules --exclude package-lock.json "$TG/examples/sample-repo/" "$WORK/"
+SAMPLE="${SAMPLE:-sample-repo}"
+rsync -a --exclude node_modules --exclude package-lock.json "$TG/examples/$SAMPLE/" "$WORK/"
 cd "$WORK"
+RUNNER="$(node -p "Object.values(require('./tracegate.config.json').lanes)[0].runner || 'vitest'")"
 npm pkg set "devDependencies.tracegate-ci=file:$TG"
 # VITEST_VERSION=<v>: run against another Vitest (examples/vitest-matrix.sh).
 [ -n "${VITEST_VERSION:-}" ] && npm pkg set "devDependencies.vitest=$VITEST_VERSION"
@@ -45,12 +48,14 @@ expect_selection() {
   if [ "$got" = "$want" ]; then echo "   ✓ $label → [ $got]"; else echo "   ✗ $label → got [ $got], want [ $want]"; exit 1; fi
 }
 
-echo; echo "== 0. doctor: the setup is ready and the recorder's seam maps"
-$TGX doctor --canary
+if [ "$RUNNER" != jest ]; then
+  echo; echo "== 0. doctor: the setup is ready and the recorder's seam maps"
+  $TGX doctor --canary
+fi
 
 echo; echo "== 1. the whole lane, recorded, in shadow"
 $TGX run --mode shadow -- --maxWorkers=2 | tee "$WORK/.run1.log"
-echo "   vitest $(node -p "require('vitest/package.json').version")"
+echo "   $RUNNER $(node -p "require('$RUNNER/package.json').version")"
 # STRICT_SEAM=1: every loaded module must be mapped (the recorder's seam held).
 if [ "${STRICT_SEAM:-}" = 1 ]; then
   share="$(sed -n 's/.*unmapped modules \([0-9.]*\)%.*/\1/p' "$WORK/.run1.log" | tail -1)"

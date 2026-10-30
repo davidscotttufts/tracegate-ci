@@ -110,11 +110,8 @@ export class ModuleMap {
  *   srcPrefix is the repo-relative source directory with a trailing `/` (e.g. `packages/api/src/`).
  */
 export async function installRecorder({ afterAll, expect, repoRoot, srcPrefix }) {
-  const outDir = process.env.TRACEGATE_RECORD;
-  if (!outDir) return;
-  const g = globalThis;
-  if (!g.__tracegate) g.__tracegate = await init(outDir, repoRoot, srcPrefix);
-  const st = g.__tracegate;
+  if (!process.env.TRACEGATE_RECORD) return;
+  const st = await recorderState({ repoRoot, srcPrefix });
   // Module evaluation for this test file happens AFTER the setup files load, so
   // from here on, reads and executed functions belong to this file.
   // Coverage is NOT reset here: the previous file's afterAll take already reset
@@ -122,9 +119,19 @@ export async function installRecorder({ afterAll, expect, repoRoot, srcPrefix })
   // counted for this file. That can only ADD functions to a footprint, i.e. cause
   // extra runs, never hide one; and it saves one coverage take per file.
   st.reads.clear();
+  afterAll(() => takeFootprint(st, expect.getState().testPath ?? ''));
+}
 
-  afterAll(async () => {
-    const testPath = expect.getState().testPath ?? '';
+/** The recorder's per-worker state, created once (a runner adapter's own setup uses it). */
+export async function recorderState({ repoRoot, srcPrefix, callCount = false }) {
+  const g = globalThis;
+  if (!g.__tracegate) g.__tracegate = await init(process.env.TRACEGATE_RECORD, repoRoot, srcPrefix, callCount);
+  return g.__tracegate;
+}
+
+/** Take one test file's footprint and write it to `<outDir>/raw/`. */
+export async function takeFootprint(st, testPath) {
+  {
     const { result } = await st.session.post('Profiler.takePreciseCoverage');
     const filePrefix = 'file://' + st.repoRoot + '/';
     const loaded = [];
@@ -146,8 +153,15 @@ export async function installRecorder({ afterAll, expect, repoRoot, srcPrefix })
       loaded.push(file);
       if (!file.startsWith(st.srcPrefix) || /\.(test|spec)\.tsx?$/.test(file)) continue; // test-side modules are tracked whole
       const mm = st.modules.get(path.join(st.repoRoot, file));
-      const scriptLen = s.functions[0]?.ranges[0]?.endOffset ?? 0;
-      if (!mm || mm.len !== scriptLen) { unmapped.push(file); continue; }
+      // functions[0] must be the script itself (offset 0 to the text's length),
+      // and the worker must have compiled exactly one text for the file. V8
+      // reuses a compiled script for identical source (Jest compiles each module
+      // again for every test file). In binary mode such a script's functions are
+      // reported ONCE, never again (MEASURED: a function run in file 1 and again
+      // in file 3 is absent from file 3's take), so the Jest environment uses
+      // call counts, where every take reports every function, reset to zero.
+      const r0 = s.functions[0]?.ranges[0];
+      if (!mm || mm.variants.size !== 1 || r0?.startOffset !== 0 || r0.endOffset !== mm.len) { unmapped.push(file); continue; }
       const offs = [];
       for (let i = 1; i < s.functions.length; i++) {
         const r0 = s.functions[i].ranges[0];
@@ -159,10 +173,10 @@ export async function installRecorder({ afterAll, expect, repoRoot, srcPrefix })
     const out = { v: 2, testFile, node: process.version, loaded: [...new Set(loaded)].sort(), exec, unmapped, reads: [...st.reads].sort(), pkgs: pkgsKnown ? [...pkgs].sort() : null };
     const name = createHash('sha256').update(testFile).digest('hex').slice(0, 24) + '.json';
     st.write(path.join(st.outDir, 'raw', name), JSON.stringify(out));
-  });
+  }
 }
 
-async function init(outDir, repoRoot, srcPrefix) {
+async function init(outDir, repoRoot, srcPrefix, callCount = false) {
   // The root as V8 reports it in script URLs: symlinks resolved (macOS /tmp is one).
   try { repoRoot = fs.realpathSync.native(repoRoot); } catch { /* keep as given */ }
   const session = new Session();
@@ -171,8 +185,10 @@ async function init(outDir, repoRoot, srcPrefix) {
   // callCount:false + detailed:false is V8's cheapest coverage mode: function
   // granularity, executed or not — exactly what a footprint needs. In this
   // ("binary") mode a function is reported as executed only in the first take
-  // after it ran; that is why there is exactly one take per test file.
-  await session.post('Profiler.startPreciseCoverage', { callCount: false, detailed: false });
+  // after it ran; that is why there is exactly one take per test file. It is
+  // right only when every test file evaluates fresh scripts (Vitest). A runner
+  // that reuses compiled scripts across files asks for call counts (callCount).
+  await session.post('Profiler.startPreciseCoverage', { callCount: !!callCount, detailed: false });
 
   const reads = new Set();
   const pkgReads = new Set(); // packages read as files (data, package.json), per worker
@@ -199,7 +215,10 @@ async function init(outDir, repoRoot, srcPrefix) {
   };
   const codesDir = path.join(outDir, 'codes');
   fs.mkdirSync(codesDir, { recursive: true });
-  for (const fnName of ['runInThisContext', 'runInContext']) {
+  // Vitest compiles through runInThisContext; Jest (30) through compileFunction,
+  // looked up on the node:vm module at call time, with the module's code as its
+  // body. Either way the text V8 reports offsets into is the text seen here.
+  for (const fnName of ['runInThisContext', 'runInContext', 'compileFunction']) {
     const orig = vm[fnName];
     vm[fnName] = function (code, ...rest) {
       try {
@@ -209,11 +228,15 @@ async function init(outDir, repoRoot, srcPrefix) {
         // Isolation re-evaluates every module for every test file, with the SAME
         // text (the tree must not change mid-run), so each module's text is
         // hashed and written once per worker and only its id is kept after that.
-        if (typeof code === 'string' && typeof file === 'string' && file.startsWith(prefixRoot) && modules.get(file)?.len !== code.length) {
+        // Every distinct text is kept as a variant: a module compiled with two
+        // different texts in one worker cannot be mapped (which text did V8 run?).
+        const prev = typeof file === 'string' ? modules.get(file) : undefined;
+        if (typeof code === 'string' && typeof file === 'string' && file.startsWith(prefixRoot) && prev?.ref !== code) {
           const sha = createHash('sha1').update(code).digest('hex');
           const p = path.join(codesDir, sha + '.js');
           if (!fs.existsSync(p)) { const tmp = `${p}.${process.pid}`; write(tmp, code); fs.renameSync(tmp, p); }
-          modules.set(file, { len: code.length, sha });
+          const variants = prev?.variants ?? new Set(); variants.add(sha);
+          modules.set(file, { len: code.length, sha, ref: code, variants });
         }
       } catch { /* recording must never change behaviour */ }
       return orig.call(this, code, ...rest);

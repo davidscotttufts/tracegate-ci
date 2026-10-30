@@ -504,6 +504,49 @@ allow is pinned to the file.
 
 **Next:** Milestone 4: a runner-adapter boundary, then Jest; `tracegate attest`.
 
+### Milestone 4: Expand (v0.9.0, done 2026-10-29)
+
+**What shipped:**
+- **Runner adapters** (`src/runners/vitest.mjs`, `jest.mjs`). An adapter has six parts:
+  list, spawn, record arguments, file arguments, the worker flag, and result parsing.
+  The recorder, the predictor and the ledger do not know which runner produced a
+  footprint. The refactor came first and changed no test.
+- **Jest 30.** The spike found two things.
+  1. **The seam.** Jest 30 compiles each module with `vm.compileFunction`, looked up on
+     `node:vm` at call time, so the recorder's existing patch extends to it. A setup file
+     cannot load the recorder, because Jest intercepts `require` and `node:module`. A test
+     environment can, because Jest loads it in the worker's own realm, one per test file,
+     with `setup()` / `teardown()` around it.
+  2. **A hole in binary coverage, MEASURED.** V8 reuses a compiled script for identical
+     source, and Jest recompiles every module per test file. In binary mode a reused
+     function is reported once and never again: a function run in test file 1 and again
+     in file 3 was absent from file 3's footprint. That would have been a real miss (an
+     edit to `add()` skipping a later file that calls it). Under Jest the recorder asks for
+     call counts, which reset on every take.
+  - The recorder now also refuses to map a module compiled with more than one text in a
+    worker. This closes a gap under Vitest too: before, two texts of the same length
+    passed the length check.
+  - **Exit criterion met.** The seam maps 100% of modules on the sample, and the
+    end-to-end asserts the same selections as Vitest's with `STRICT_SEAM=1`.
+- **`tracegate attest` / `verify`** (`src/attest.mjs`): a signed git note of what green
+  runs tested on the commit's exact tree, one green run per lane required. `verify`
+  rejects a tampered statement, one copied to another commit, and an unsigned one unless
+  told otherwise.
+
+**Tests:** 12 attestation tests and 9 Jest recorder tests, with 10 new sabotage witnesses.
+A stale witness anchor (`hook-lets-leases-through`, broken by the Milestone 3 hook change)
+was found by an anchor check and fixed.
+
+### v1.0 criteria (status 2026-10-29)
+
+- [x] CLI and MCP surface documented (README, `tracegate --help`, MCP tool descriptions).
+- [ ] Report-card data from the host project published (`docs/evidence/`): the owner
+      runs `tracegate report-card` there and decides what to publish.
+- [ ] At least two external repositories using it: needs the npm release first.
+- [x] §5 open questions answered where this work could answer them: Jest is supported;
+      the published metric is both the per-verdict miss rate with its interval and the hole
+      exposure bound (Milestone 2).
+
 ### Out of scope, deliberately
 
 | Out of scope | Why |
@@ -518,7 +561,11 @@ allow is pinned to the file.
 
 - [ ] Which model provider, and is sending failure output and diffs off the machine
       acceptable for a given project? An on-device model is an option for Phase 1.
-- [ ] Should Phase 0 support Jest and Node's test runner, or only Vitest?
+- [x] Should Phase 0 support Jest and Node's test runner, or only Vitest? **Jest 30: yes
+      (Milestone 4). `node:test`: not yet; its runner evaluates modules through Node's own
+      loader, not a `vm` seam.**
 - [ ] Does the frontend lane (DOM timing, i18n) need a different Red Reader prompt?
-- [ ] What is the right published metric for a selector: miss rate per gate, or the
-      longest time a real failure went undetected?
+- [x] What is the right published metric for a selector: miss rate per gate, or the
+      longest time a real failure went undetected? **Both, from `tracegate report-card`
+      (Milestone 2): misses per checked verdict and per run with 95% Wilson intervals, and
+      each hole's exposure (an upper bound on how long it went undetected).**

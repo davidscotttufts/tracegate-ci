@@ -17,7 +17,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { ctx, git, isTestFile, lane, rel, vitestTested, vitestVersion, VITEST_TESTED } from './config.mjs';
 import { seamShare } from './predictor.mjs';
-import { vitestBin } from './run.mjs';
+import { runnerOf } from './runners/index.mjs';
 
 const CONFIG_RE = /^(.*\/)?(vitest|vite)\.config\.(ts|mts|cts|js|mjs|cjs)$/;
 const RECORDER_LINE = "...(process.env.TRACEGATE_RECORD ? ['tracegate-ci/vitest-setup'] : [])";
@@ -145,6 +145,7 @@ export function doctor(o) {
   const lanes = o.lane && o.lane !== true ? [lane(o.lane)] : Object.values(c.lanes);
   for (const ln of lanes) {
     console.log(`lane ${ln.name} (${ln.dir || '.'}):`);
+    if (ln.runner === 'jest') { doctorJest(ln, o, say); continue; }
     const v = vitestVersion(ln);
     if (!v) say(BAD, 'vitest does not resolve from the lane directory (npm install?)');
     else say(vitestTested(v) ? OK : WARN, `vitest ${v}${vitestTested(v) ? '' : ` — outside the tested range (${range}); run --canary`}`);
@@ -158,6 +159,20 @@ export function doctor(o) {
   return failed ? 1 : 0;
 }
 
+// A Jest lane (runner "jest"): Jest 30 and the recorder's test environment.
+function doctorJest(ln, o, say) {
+  const c = ctx();
+  const laneAbs = path.join(c.root, ln.dir);
+  let v = null; try { v = JSON.parse(fs.readFileSync(createRequire(path.join(laneAbs, 'package.json')).resolve('jest/package.json'), 'utf8')).version; } catch { /* missing */ }
+  if (!v) say(BAD, 'jest does not resolve from the lane directory (npm install?)');
+  else say(v.startsWith('30.') ? OK : WARN, `jest ${v}${v.startsWith('30.') ? '' : ' — the Jest adapter is tested on Jest 30; run --canary'}`);
+  try { createRequire(path.join(laneAbs, 'package.json')).resolve('typescript'); say(OK, 'typescript resolves'); } catch { say(BAD, 'typescript does not resolve from the lane (the predictor parses sources with it)'); }
+  const configs = fs.readdirSync(laneAbs).filter((f) => /^jest\.config\.(js|cjs|mjs|ts|json)$/.test(f) || f === 'package.json');
+  const wired = configs.some((f) => { try { return fs.readFileSync(path.join(laneAbs, f), 'utf8').includes('tracegate-ci/jest-environment'); } catch { return false; } });
+  say(wired ? OK : BAD, wired ? 'recorder wired as the Jest test environment' : "the Jest config does not set testEnvironment: 'tracegate-ci/jest-environment'");
+  if (o.canary && v && wired) canary(ln, say);
+}
+
 /** Record ONE test file and check that the modules it loaded map to source. */
 function canary(ln, say) {
   const c = ctx();
@@ -167,11 +182,11 @@ function canary(ln, say) {
   const file = tests[0];
   const run = fs.mkdtempSync(path.join(os.tmpdir(), `tracegate-canary-`));
   try {
-    const r = spawnSync(process.execPath, [vitestBin(laneAbs), 'run', path.join(c.root, file)], {
+    const r = spawnSync(process.execPath, [runnerOf(ln).bin(laneAbs), ...(ln.runner === 'jest' ? [] : ['run']), ...runnerOf(ln).filesArgs([path.join(c.root, file)])], {
       cwd: laneAbs, encoding: 'utf8', env: { ...process.env, TRACEGATE_RECORD: run, TRACEGATE_ROOT: c.root, TRACEGATE_LANE: ln.name },
     });
     const { mapped, unmapped } = seamShare(run);
-    if (!mapped && !unmapped) { say(BAD, `canary ${file}: nothing recorded (vitest exit ${r.status})${r.status ? `\n${(r.stderr || r.stdout).split('\n').slice(-8).join('\n')}` : ''}`); return; }
+    if (!mapped && !unmapped) { say(BAD, `canary ${file}: nothing recorded (${runnerOf(ln).name} exit ${r.status})${r.status ? `\n${(r.stderr || r.stdout).split('\n').slice(-8).join('\n')}` : ''}`); return; }
     const share = (100 * unmapped / (mapped + unmapped)).toFixed(1);
     say(unmapped ? WARN : OK, `canary ${file}: ${mapped} module(s) mapped, ${unmapped} unmapped (${share}%)${unmapped ? ' — the seam may have moved; predictions stay safe but coarse' : ''}${r.status ? ` (the test itself exited ${r.status})` : ''}`);
   } finally { fs.rmSync(run, { recursive: true, force: true }); }

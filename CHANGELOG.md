@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.9.0 (unreleased): Jest and attestation
+
+- Jest 30 as a second runner: `"runner": "jest"` on a lane, and
+  `testEnvironment: 'tracegate-ci/jest-environment'` in the Jest config.
+  - The recorder captures modules through `vm.compileFunction`, and uses V8 call counts
+    under Jest.
+  - `doctor` checks a Jest lane.
+  - CI runs the end-to-end on `examples/sample-repo-jest`.
+- Runner adapters (`src/runners/`): everything runner-specific is behind one interface.
+  No behaviour change for Vitest.
+- `tracegate attest` / `verify`: a signed git note (`refs/notes/tracegate`) of what green
+  runs tested on a commit's exact tree. `tracegate run` logs green runs to
+  `green-<host>.tsv`.
+- The recorder refuses to map a module the worker compiled with more than one text.
+- The silence guard compares a root commit against the empty tree instead of skipping.
+
 ## 0.8.0 (unreleased): merge train and silence guard
 
 Includes 0.7.0, which was not published on its own.

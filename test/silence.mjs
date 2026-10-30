@@ -79,6 +79,10 @@ check('...for that version of the file only: a later skip needs a new allow', qu
 g('rm', '-q', 'test/b.test.ts'); commit('delete b');
 check('a deleted test file is caught at the run', S.check({}).findings.some((f) => f.kind === 'deleted-file' && f.file === 'test/b.test.ts'));
 g('checkout', '-q', 'main');
+const root = g('rev-parse', 'HEAD');
+check('on a root commit the base is the empty tree: what it adds is new, nothing is deleted',
+  S.baseFor(root) === '4b825dc642cb6eb9a060e54bf8d69288fbee4904' && kinds(S.check({ head: root }).findings) === 'skip:test/a.test.ts', kinds(S.check({ head: root }).findings));
+w('README.md', 'x\n'); commit('a second commit on main');
 check('on main itself (no merge base below HEAD) the first parent is the base', S.baseFor(g('rev-parse', 'HEAD')) === `${g('rev-parse', 'HEAD')}^`);
 void head;
 
