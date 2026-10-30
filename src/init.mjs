@@ -16,6 +16,7 @@ import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { ctx, git, isTestFile, lane, rel, vitestTested, vitestVersion, VITEST_TESTED } from './config.mjs';
+import { findTypescript } from './model.mjs';
 import { seamShare } from './predictor.mjs';
 import { runnerOf } from './runners/index.mjs';
 
@@ -149,7 +150,7 @@ export function doctor(o) {
     const v = vitestVersion(ln);
     if (!v) say(BAD, 'vitest does not resolve from the lane directory (npm install?)');
     else say(vitestTested(v) ? OK : WARN, `vitest ${v}${vitestTested(v) ? '' : ` — outside the tested range (${range}); run --canary`}`);
-    try { createRequire(path.join(c.root, ln.dir, 'package.json')).resolve('typescript'); say(OK, 'typescript resolves'); } catch { say(BAD, 'typescript does not resolve from the lane (the predictor parses sources with it)'); }
+    checkTypescript(path.join(c.root, ln.dir), say);
     const configs = findVitestConfigs(fs.readdirSync(path.join(c.root, ln.dir)).map((f) => rel(ln.dir, f)));
     const wired = configs.some(({ file }) => { try { return fs.readFileSync(path.join(c.root, file), 'utf8').includes('tracegate-ci/vitest-setup'); } catch { return false; } });
     say(wired ? OK : BAD, wired ? 'recorder wired in the Vitest config' : `the Vitest config does not load tracegate-ci/vitest-setup (tracegate init --write)`);
@@ -159,6 +160,14 @@ export function doctor(o) {
   return failed ? 1 : 0;
 }
 
+// The predictor parses sources with the lane's TypeScript; resolving is not enough,
+// it must carry the parser API (TypeScript 7 does not).
+export function checkTypescript(laneAbs, say) {
+  const f = findTypescript(laneAbs);
+  if (f.ts) say(OK, `typescript ${f.version} parses${f.name === 'typescript' ? '' : ` (as ${f.name})`}`);
+  else say(BAD, f.why);
+}
+
 // A Jest lane (runner "jest"): Jest 30 and the recorder's test environment.
 function doctorJest(ln, o, say) {
   const c = ctx();
@@ -166,7 +175,7 @@ function doctorJest(ln, o, say) {
   let v = null; try { v = JSON.parse(fs.readFileSync(createRequire(path.join(laneAbs, 'package.json')).resolve('jest/package.json'), 'utf8')).version; } catch { /* missing */ }
   if (!v) say(BAD, 'jest does not resolve from the lane directory (npm install?)');
   else say(v.startsWith('30.') ? OK : WARN, `jest ${v}${v.startsWith('30.') ? '' : ' — the Jest adapter is tested on Jest 30; run --canary'}`);
-  try { createRequire(path.join(laneAbs, 'package.json')).resolve('typescript'); say(OK, 'typescript resolves'); } catch { say(BAD, 'typescript does not resolve from the lane (the predictor parses sources with it)'); }
+  checkTypescript(laneAbs, say);
   const configs = fs.readdirSync(laneAbs).filter((f) => /^jest\.config\.(js|cjs|mjs|ts|json)$/.test(f) || f === 'package.json');
   const wired = configs.some((f) => { try { return fs.readFileSync(path.join(laneAbs, f), 'utf8').includes('tracegate-ci/jest-environment'); } catch { return false; } });
   say(wired ? OK : BAD, wired ? 'recorder wired as the Jest test environment' : "the Jest config does not set testEnvironment: 'tracegate-ci/jest-environment'");

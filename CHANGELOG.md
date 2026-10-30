@@ -1,7 +1,23 @@
 # Changelog
 
-## Unreleased
+## 0.9.1 (2026-10-30): fixes from installing 0.9.0 as a new user
 
+- **Uncommitted changes are selected against.** `select` compared footprints with HEAD
+  only, so in enforce an uncommitted edit to a function a test ran reused that test's
+  verdict and the run passed without it. It now predicts against the working tree (a
+  `git stash create` snapshot: no ref, no stash entry).
+- **A run on uncommitted changes is no evidence about HEAD.** It was recorded as a full
+  run (resetting the 24 h full-run clock and the report card's exposure bound) and as a
+  green run that `tracegate attest` could sign for HEAD's tree. Neither is recorded now.
+- **TypeScript 7.** `typescript@latest` is now the native compiler, with no JS parser API,
+  and 0.9.0 crashed after the tests (`reading 'Latest'`) while `doctor` passed. Tracegate
+  now parses with TypeScript 5 or 6 only: it looks for `tracegate-typescript` (6 installed
+  under an alias) before `typescript`, `doctor` fails a lane it cannot parse for and prints
+  the fix, and the peer range is `>=5.0.0 <7`. A CI job runs the end-to-end on 7 + alias.
+- `server.json` fits the MCP Registry: a description of at most 100 characters (0.9.0's
+  was 119, which `mcp-publisher` rejects) and the 2025-12-11 schema. A test keeps the
+  versions in `package.json`, `plugin.json` and `server.json` together.
+- `tracegate --version` (also `-v`, `version`).
 - Releases are staged through npm Trusted Publishing (OIDC) instead of an `NPM_TOKEN`
   secret. A pushed tag stages the version; a maintainer approves it with 2FA
   (`npm stage approve`) before it can be installed.

@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Tracegate CLI. See README.md "Usage".
-import { lane } from './config.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import { TOOL_DIR, lane } from './config.mjs';
 import { effectiveMode, fullDone, ingest, modeDecision, printSavings, report, select, status, triage } from './predictor.mjs';
 import { replay } from './replay.mjs';
 import { runLane } from './run.mjs';
@@ -50,6 +52,7 @@ const USAGE = `usage: tracegate <command> [options]
   verify  [<commit>] [--allowed-signers f] [--allow-unsigned] [--json]
                                        check a commit's attestation: signature, commit, tree
   status                               ledger, entry bar and mode per lane
+  version                              print the installed version (also --version, -v)
   savings [--lane l] [--json]          what reuse would have saved so far (from the shadow
                                        log, so it shows value before the entry bar is met)
   report-card [--lane l] [--json] [--out file]
@@ -120,7 +123,8 @@ function printMachine(m, json) {
 const cmd = process.argv[2];
 const { o, rest } = parse(process.argv.slice(3));
 try {
-  if (cmd === 'init') process.exitCode = (await import('./init.mjs')).init(o);
+  if (cmd === '--version' || cmd === '-v' || cmd === 'version') console.log(JSON.parse(fs.readFileSync(path.join(TOOL_DIR, 'package.json'), 'utf8')).version);
+  else if (cmd === 'init') process.exitCode = (await import('./init.mjs')).init(o);
   else if (cmd === 'doctor') process.exitCode = (await import('./init.mjs')).doctor(o);
   else if (cmd === 'mode') { const d = modeDecision(lane(o.lane).name); console.log(effectiveMode(lane(o.lane).name)); if (o.why) console.error(d.why); }
   else if (cmd === 'select') select(o);

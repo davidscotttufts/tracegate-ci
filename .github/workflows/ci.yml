@@ -47,6 +47,18 @@ jobs:
       - run: npm ci
       - run: npm run test:e2e-jest
 
+  # TypeScript 7 (the native compiler) has no JS parser API. A repository on 7
+  # installs 6 beside it as `tracegate-typescript`; the same end-to-end must pass.
+  e2e-typescript-7:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: TYPESCRIPT_VERSION=7 TS_ALIAS_VERSION=6 npm run test:e2e
+
   # Tracegate vs Vitest recordDependencies on the same commits; every selection is asserted.
   compare-vitest:
     runs-on: ubuntu-latest

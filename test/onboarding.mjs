@@ -92,6 +92,42 @@ const runHook = (input, env = {}) => { try { execFileSync(process.execPath, [hoo
 check('hook process: exit 2 blocks a bare run in a Tracegate repository', runHook(JSON.stringify({ tool_input: { command: 'npx vitest run' }, cwd: repo })) === 2);
 check('hook process: exit 0 elsewhere, and on garbage input', runHook(JSON.stringify({ tool_input: { command: 'npx vitest run' }, cwd: tmp })) === 0 && runHook('not json') === 0);
 
+// ── which TypeScript the predictor parses with ──────────────────────────────
+// Stand-ins: TypeScript 7's package exports only its version; 5 and 6 carry the parser.
+const { findTypescript, TS_ALIAS } = await import('../src/model.mjs');
+const fakeTs = (dir, name, version, parser) => {
+  const d = path.join(tmp, dir, 'node_modules', name); fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify({ name, version, main: 'index.js' }));
+  fs.writeFileSync(path.join(d, 'index.js'), `module.exports = { version: '${version}'${parser ? ', createSourceFile() {}' : ''} };`);
+};
+fakeTs('ts6', 'typescript', '6.0.3', true);
+fakeTs('ts7', 'typescript', '7.0.2', false);
+fakeTs('ts7alias', 'typescript', '7.0.2', false); fakeTs('ts7alias', TS_ALIAS, '6.0.3', true);
+fakeTs('both', 'typescript', '6.0.3', true); fakeTs('both', TS_ALIAS, '5.9.3', true);
+fs.mkdirSync(path.join(tmp, 'nots'));
+const ts6 = findTypescript(path.join(tmp, 'ts6')), ts7 = findTypescript(path.join(tmp, 'ts7'));
+const ts7a = findTypescript(path.join(tmp, 'ts7alias')), none = findTypescript(path.join(tmp, 'nots'));
+check('TypeScript 6 parses', ts6.ts && ts6.version === '6.0.3' && ts6.name === 'typescript');
+check('TypeScript 7 is refused with the alias install as the fix', !ts7.ts && /7\.0\.2 has no JS parser API/.test(ts7.why) && ts7.why.includes(`${TS_ALIAS}@npm:typescript@6`), ts7.why);
+check('...and with 6 installed under the alias beside it, the alias parses', ts7a.ts && ts7a.name === TS_ALIAS && ts7a.version === '6.0.3', JSON.stringify(ts7a));
+check('an alias installed for Tracegate wins over a usable typescript beside it', findTypescript(path.join(tmp, 'both')).version === '5.9.3');
+check('no TypeScript at all says so', !none.ts && /no TypeScript install found/.test(none.why), none.why);
+const doc = (dir) => { const lines = []; ini.checkTypescript(path.join(tmp, dir), (s, m) => lines.push(`${s} ${m}`)); return lines.join('\n'); };
+check('doctor fails a lane on TypeScript 7 instead of passing it because it resolves', doc('ts7').startsWith('✗') && doc('ts6').startsWith('✓ typescript 6.0.3 parses') && doc('ts7alias').includes(`(as ${TS_ALIAS})`), doc('ts7'));
+
+// ── tracegate --version ─────────────────────────────────────────────────────
+const cli = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', 'src', 'cli.mjs');
+const pkgVersion = JSON.parse(fs.readFileSync(path.join(path.dirname(cli), '..', 'package.json'), 'utf8')).version;
+check('tracegate --version, -v and version print the package version', ['--version', '-v', 'version'].every((a) => execFileSync(process.execPath, [cli, a], { encoding: 'utf8' }).trim() === pkgVersion));
+
+// ── release metadata: what npm, the plugin and the MCP Registry are told agrees ──
+const top = path.join(path.dirname(cli), '..');
+const readJson = (f) => JSON.parse(fs.readFileSync(path.join(top, f), 'utf8'));
+const pkg = readJson('package.json'), plugin = readJson('.claude-plugin/plugin.json'), server = readJson('server.json');
+check('package.json, plugin.json and server.json carry one version', plugin.version === pkg.version && server.version === pkg.version && server.packages.every((p) => p.version === pkg.version), `${pkg.version} ${plugin.version} ${server.version}`);
+check('server.json names the npm package and its mcpName', server.name === pkg.mcpName && server.packages.some((p) => p.registryType === 'npm' && p.identifier === pkg.name));
+check('server.json description fits the MCP Registry (1..100 characters)', server.description.length >= 1 && server.description.length <= 100, `${server.description.length} characters`);
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(fail ? `\n== onboarding tests: ${fail} FAILED, ${pass} passed ==` : `\n== onboarding tests: ${pass} passed ==`);
 process.exit(fail ? 1 : 0);

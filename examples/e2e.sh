@@ -11,6 +11,8 @@
 #   4. edit whisper(), which no test runs → nothing selected
 #   5. edit add() → add.test.ts and report.test.ts (formatTotal calls add)
 #   6. edit data/rates.json, which one test reads → ONLY rates.test.ts
+#   7. the add() edit left uncommitted → the same two files; the run records no
+#      full run and no attestation evidence
 # Every selection is ASSERTED; the script exits non-zero on a mismatch.
 # Low priority on purpose: nice 19, two vitest workers. KEEP=1 keeps the work dir.
 set -euo pipefail
@@ -26,6 +28,10 @@ RUNNER="$(node -p "Object.values(require('./tracegate.config.json').lanes)[0].ru
 npm pkg set "devDependencies.tracegate-ci=file:$TG"
 # VITEST_VERSION=<v>: run against another Vitest (examples/vitest-matrix.sh).
 [ -n "${VITEST_VERSION:-}" ] && npm pkg set "devDependencies.vitest=$VITEST_VERSION"
+# TYPESCRIPT_VERSION=7 TS_ALIAS_VERSION=6: a repository on TypeScript 7, with 6
+# installed beside it under the alias Tracegate looks for (src/model.mjs).
+[ -n "${TYPESCRIPT_VERSION:-}" ] && npm pkg set "devDependencies.typescript=$TYPESCRIPT_VERSION"
+[ -n "${TS_ALIAS_VERSION:-}" ] && npm pkg set "devDependencies.tracegate-typescript=npm:typescript@$TS_ALIAS_VERSION"
 # Vitest 5 takes vite as a peer, which --legacy-peer-deps below does not install.
 [ -n "${VITE_VERSION:-}" ] && npm pkg set "devDependencies.vite=$VITE_VERSION"
 # --install-links copies the package in as a registry install would.
@@ -50,7 +56,11 @@ expect_selection() {
 
 if [ "$RUNNER" != jest ]; then
   echo; echo "== 0. doctor: the setup is ready and the recorder's seam maps"
-  $TGX doctor --canary
+  $TGX doctor --canary | tee "$WORK/.doctor.log"
+fi
+if [ -n "${TS_ALIAS_VERSION:-}" ]; then
+  echo "   typescript $(node -p "require('typescript/package.json').version"), tracegate-typescript $(node -p "require('tracegate-typescript/package.json').version")"
+  if grep -q '(as tracegate-typescript)' "$WORK/.doctor.log"; then echo "   ✓ the predictor parses with the alias"; else echo "   ✗ the alias was not used"; exit 1; fi
 fi
 
 echo; echo "== 1. the whole lane, recorded, in shadow"
@@ -104,4 +114,18 @@ node -e '
     && c.observations.runs === 2 && c.observations.enforce === 1 && c.misses.missed === 0;
   console.log(`   ${ok ? "✓" : "✗"} savings: ${s.reusableFiles} of ${s.files} file runs reusable over ${s.runs} runs; card: ${c.observations.runs} runs, ${c.misses.missed} misses`);
   process.exit(ok ? 0 : 1);' "$WORK/.savings.json" "$WORK/.card.json"
+
+echo; echo "== 6. uncommitted changes: selected against the working tree, never evidence about HEAD"
+git checkout -q --detach "$REC"
+sed -i.bak 's/return round(a + b);/return round(b + a);/' src/math.ts && rm src/math.ts.bak
+expect_selection 'an UNCOMMITTED edit to add()' test/add.test.ts test/report.test.ts
+LEDGER="$(git rev-parse --git-common-dir)/tracegate"
+lines() { cat "$LEDGER/$1" 2>/dev/null | wc -l | tr -d ' '; }
+full0="$(lines full-e2e.tsv)"; green0="$(lines green-e2e.tsv)"
+$TGX run --mode shadow -- --maxWorkers=2 > "$WORK/.run6.log"
+grep -E '^tracegate' "$WORK/.run6.log" | sed 's/^/   /'
+if grep -q 'not recorded as a full run' "$WORK/.run6.log" && [ "$(lines full-e2e.tsv)" = "$full0" ] && [ "$(lines green-e2e.tsv)" = "$green0" ]; then
+  echo "   ✓ no full-run row and no attestation evidence from a dirty tree"
+else echo "   ✗ a dirty tree was recorded (full $full0 → $(lines full-e2e.tsv), green $green0 → $(lines green-e2e.tsv))"; exit 1; fi
+git checkout -q -- src/math.ts
 echo; echo "== e2e: all selections as expected"
