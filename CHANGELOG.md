@@ -1,6 +1,12 @@
 # Changelog
 
-## 0.9.0 (unreleased): Jest and attestation
+## Unreleased
+
+- Releases are staged through npm Trusted Publishing (OIDC) instead of an `NPM_TOKEN`
+  secret. A pushed tag stages the version; a maintainer approves it with 2FA
+  (`npm stage approve`) before it can be installed.
+
+## 0.9.0 (2026-10-30): Jest and attestation
 
 - Jest 30 as a second runner: `"runner": "jest"` on a lane, and
   `testEnvironment: 'tracegate-ci/jest-environment'` in the Jest config.
