@@ -1,5 +1,12 @@
 # Evidence
 
+## Cards
+
+| Card | Project | Window | Runs |
+|---|---|---|---|
+| [openwop-app-2026-10](openwop-app-2026-10.md) ([JSON](openwop-app-2026-10.json)) | openwop-app (private), the project Tracegate was built in | 2026-10-17 to 2026-10-30 | 581 (562 shadow, 19 enforce) |
+
+
 Tracegate's claim is that a skipped test is a measured risk, not a guess. This folder holds the measurements, as report cards generated from a real ledger. No numbers here are written by hand.
 
 ```sh
@@ -19,4 +26,4 @@ The card is computed from the ledger's append-only logs (`shadow-`, `misses-`, `
 
 ## Publishing
 
-Publish a card only from a ledger whose owner agrees to it. A card names test files and commit prefixes, so review it first.
+Publish a card only from a ledger whose owner agrees to it. A card names test files and commit prefixes, so review it first. A private project's card may redact test paths and commit prefixes, and says so; its numbers are never edited.
