@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **The first published report card:** `docs/evidence/openwop-app-2026-10.md`, from the
+  ledger of the project Tracegate was built in (581 runs over two weeks). One private test
+  path and one commit prefix are redacted.
+- **A plugin icon** (`assets/icon.svg`, rendered to `assets/icon.png`), named by `icon` in
+  `plugin.json` for the plugin directory listing.
+
 ## 0.9.1 (2026-10-30): fixes from installing 0.9.0 as a new user
 
 - **Uncommitted changes are selected against.** `select` compared footprints with HEAD

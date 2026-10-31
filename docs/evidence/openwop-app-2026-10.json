@@ -1,0 +1,120 @@
+{
+  "generatedAt": "2026-10-31T14:37:33.579Z",
+  "host": "MacBook-Pro-48",
+  "lanes": [
+    {
+      "lane": "backend",
+      "observations": {
+        "runs": 343,
+        "shadow": 343,
+        "enforce": 0,
+        "first": "2026-10-17T16:22:04.200Z",
+        "last": "2026-10-30T19:05:20.414Z",
+        "meanSelected": 0.402,
+        "meanTimePct": 52.173
+      },
+      "misses": {
+        "checked": 558870,
+        "missed": 117,
+        "rate": 0.0002,
+        "wilson95": [
+          0.0002,
+          0.0003
+        ],
+        "runsWithMiss": 17,
+        "perRun": 0.0496,
+        "perRunWilson95": [
+          0.0312,
+          0.0779
+        ]
+      },
+      "triage": {
+        "hole": 1,
+        "flake": 64,
+        "untriaged": 52
+      },
+      "holes": [
+        {
+          "file": "[redacted]",
+          "head": "[redacted]",
+          "at": "2026-10-28T13:02:15.048Z",
+          "exposureHours": 1
+        }
+      ],
+      "longestExposure": {
+        "file": "[redacted]",
+        "head": "[redacted]",
+        "at": "2026-10-28T13:02:15.048Z",
+        "exposureHours": 1
+      },
+      "auditCost": {
+        "audited": 0,
+        "mustRun": 0,
+        "ratio": null
+      }
+    },
+    {
+      "lane": "frontend",
+      "observations": {
+        "runs": 238,
+        "shadow": 219,
+        "enforce": 19,
+        "first": "2026-10-17T16:49:46.116Z",
+        "last": "2026-10-30T18:18:44.403Z",
+        "meanSelected": 0.143,
+        "meanTimePct": 16.294
+      },
+      "misses": {
+        "checked": 201657,
+        "missed": 10,
+        "rate": 0,
+        "wilson95": [
+          0,
+          0.0001
+        ],
+        "runsWithMiss": 7,
+        "perRun": 0.0294,
+        "perRunWilson95": [
+          0.0143,
+          0.0595
+        ]
+      },
+      "triage": {
+        "hole": 0,
+        "flake": 9,
+        "untriaged": 1
+      },
+      "holes": [],
+      "longestExposure": null,
+      "auditCost": {
+        "audited": 964,
+        "mustRun": 1870,
+        "ratio": 0.5155
+      }
+    }
+  ],
+  "redReader": {
+    "opinions": 1,
+    "scored": 1,
+    "agree": 1,
+    "disagree": [],
+    "unscored": 0,
+    "escalations": 1,
+    "raised": 1,
+    "overridden": 0
+  },
+  "conductor": {
+    "order": {
+      "runs": 0
+    },
+    "train": {
+      "trains": 0,
+      "red": 0,
+      "flaggedRed": 0,
+      "flagged": 0,
+      "independentPairs": 0,
+      "falseIndependent": 0,
+      "falseIndependenceRate": null
+    }
+  }
+}

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>Tracegate</title>
+  <rect width="512" height="512" rx="112" fill="#0f1b2d"/>
+  <!-- the gate: an arch the trace has to pass through -->
+  <path d="M206 412 V218 a72 72 0 0 1 144 0 V412" fill="none" stroke="#e8eef6" stroke-width="32" stroke-linecap="round" opacity="0.92"/>
+  <!-- the trace, a test's recorded footprint, runs through the gate and ends as a green verdict -->
+  <polyline points="56,312 96,312 128,240 160,240 190,312 388,312 414,338 462,282" fill="none" stroke="#3ddc97" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="56" cy="312" r="24" fill="#3ddc97"/>
+</svg>
