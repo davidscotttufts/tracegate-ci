@@ -1,31 +1,31 @@
 {
-  "generatedAt": "2026-10-31T14:37:33.579Z",
+  "generatedAt": "2026-11-01T03:25:14.335Z",
   "host": "MacBook-Pro-48",
   "lanes": [
     {
       "lane": "backend",
       "observations": {
-        "runs": 343,
-        "shadow": 343,
+        "runs": 358,
+        "shadow": 358,
         "enforce": 0,
-        "first": "2026-10-17T16:22:04.200Z",
-        "last": "2026-10-30T19:05:20.414Z",
-        "meanSelected": 0.402,
-        "meanTimePct": 52.173
+        "first": "2026-10-13T07:00:58.929Z",
+        "last": "2026-11-01T01:33:35.390Z",
+        "meanSelected": 0.41,
+        "meanTimePct": 53.204
       },
       "misses": {
-        "checked": 558870,
+        "checked": 577830,
         "missed": 117,
         "rate": 0.0002,
         "wilson95": [
           0.0002,
-          0.0003
+          0.0002
         ],
         "runsWithMiss": 17,
-        "perRun": 0.0496,
+        "perRun": 0.0475,
         "perRunWilson95": [
-          0.0312,
-          0.0779
+          0.0299,
+          0.0747
         ]
       },
       "triage": {
@@ -56,16 +56,16 @@
     {
       "lane": "frontend",
       "observations": {
-        "runs": 238,
-        "shadow": 219,
-        "enforce": 19,
-        "first": "2026-10-17T16:49:46.116Z",
-        "last": "2026-10-30T18:18:44.403Z",
-        "meanSelected": 0.143,
-        "meanTimePct": 16.294
+        "runs": 252,
+        "shadow": 221,
+        "enforce": 31,
+        "first": "2026-10-13T07:03:04.748Z",
+        "last": "2026-11-01T01:39:00.953Z",
+        "meanSelected": 0.141,
+        "meanTimePct": 16.272
       },
       "misses": {
-        "checked": 201657,
+        "checked": 204502,
         "missed": 10,
         "rate": 0,
         "wilson95": [
@@ -73,10 +73,10 @@
           0.0001
         ],
         "runsWithMiss": 7,
-        "perRun": 0.0294,
+        "perRun": 0.0278,
         "perRunWilson95": [
-          0.0143,
-          0.0595
+          0.0135,
+          0.0562
         ]
       },
       "triage": {
@@ -87,9 +87,9 @@
       "holes": [],
       "longestExposure": null,
       "auditCost": {
-        "audited": 964,
-        "mustRun": 1870,
-        "ratio": 0.5155
+        "audited": 1545,
+        "mustRun": 3614,
+        "ratio": 0.4275
       }
     }
   ],

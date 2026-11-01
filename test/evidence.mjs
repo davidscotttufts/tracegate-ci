@@ -84,6 +84,19 @@ check('...and the mean share selected is per run', card.observations.meanSelecte
 const md = E.cardMarkdown(E.reportCard({}));
 check('the Markdown card states the rate with its interval and the exposure bound', /2\.00% per checked verdict \(95% CI \d/.test(md) && md.includes('12 h (x.test.ts at h2)') && md.includes('upper bound'), md);
 
+// ── the window spans every host's log, in time order ────────────────────────
+// Logs are read file by file (shadow-a… before shadow-z…), so the first row read
+// is not the earliest: here host "a" logged later than host "z" did.
+{
+  const hdr = SHADOW_HEADER;
+  const line = (at) => hdr.map((k) => ({ at, lane: 'win', mode: 'shadow', head: 'h', files: '1', must_run: '1', reusable: '0', audited: '0', run_time_pct: '100', misses: '0' })[k] ?? '').join('\t');
+  fs.writeFileSync(path.join(ledger, 'shadow-a.tsv'), [hdr.join('\t'), line('2026-10-20T00:00:00.000Z'), line('2026-10-21T00:00:00.000Z')].join('\n') + '\n');
+  fs.writeFileSync(path.join(ledger, 'shadow-z.tsv'), [hdr.join('\t'), line('2026-10-13T00:00:00.000Z'), line('2026-10-30T00:00:00.000Z'), line('2026-10-15T00:00:00.000Z')].join('\n') + '\n');
+  const w = E.laneCard('win').observations;
+  check('report card: the window is the earliest to the latest row across hosts, not the read order', w.first === '2026-10-13T00:00:00.000Z' && w.last === '2026-10-30T00:00:00.000Z', JSON.stringify(w));
+  fs.rmSync(path.join(ledger, 'shadow-a.tsv')); fs.rmSync(path.join(ledger, 'shadow-z.tsv'));
+}
+
 // ── through the CLI ─────────────────────────────────────────────────────────
 const cli = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', 'src', 'cli.mjs');
 const env = { ...process.env };

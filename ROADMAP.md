@@ -572,7 +572,7 @@ no unit harness, so it has no sabotage witness.
 
 - [x] CLI and MCP surface documented (README, `tracegate --help`, MCP tool descriptions).
 - [x] Report-card data from the host project published:
-      `docs/evidence/openwop-app-2026-10.md` (581 runs, 2026-10-17 to 2026-10-30).
+      `docs/evidence/openwop-app-2026-10.md` (610 runs, 2026-10-13 to 2026-11-01).
 - [ ] At least two external repositories using it: on npm since 0.9.0 (2026-10-30).
 - [x] §5 open questions answered where this work could answer them: Jest is supported;
       the published metric is both the per-verdict miss rate with its interval and the hole

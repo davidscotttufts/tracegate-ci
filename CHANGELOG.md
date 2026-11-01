@@ -3,8 +3,14 @@
 ## Unreleased
 
 - **The first published report card:** `docs/evidence/openwop-app-2026-10.md`, from the
-  ledger of the project Tracegate was built in (581 runs over two weeks). One private test
+  ledger of the project Tracegate was built in (610 runs over three weeks). One private test
   path and one commit prefix are redacted.
+- **Report card: the observation window is in time order.** It showed the first and last
+  row read, and a ledger holds one log per host, read file by file, so a two-host ledger
+  printed a window that started days late (the first card said 2026-10-17 for a lane
+  observed since 2026-10-13). Counts and rates were not affected.
+- **README: what the plugin runs, reads, writes and sends**, for the plugin directory's
+  security scan; `plugin.json` gains `displayName`, `documentationUrl` and `supportUrl`.
 - **A plugin icon** (`assets/icon.svg`, rendered to `assets/icon.png`), named by `icon` in
   `plugin.json` for the plugin directory listing.
 
