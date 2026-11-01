@@ -312,6 +312,9 @@ const WITNESSES = [
   ['exposure-from-the-full-run-before', 'src/evidence.mjs',
     'const before = fulls.filter((t) => t < at).pop();', 'const before = fulls.pop();',
     '...exposure runs from the last full run BEFORE the miss', 'evidence.mjs'],
+  ['card-window-in-time-order', 'src/evidence.mjs',
+    'first: obs.length ? obs.reduce((a, r) => (r.at < a ? r.at : a), obs[0].at) : null,', 'first: obs[0]?.at ?? null,',
+    'report card: the window is the earliest to the latest row across hosts', 'evidence.mjs'],
   // Merge train (test/train.mjs).
   ['train-red-never-lands', 'src/train.mjs',
     'if (gate(b.dir, o, label)) {', 'if (gate(b.dir, o, label) || b.merged.length === 1) {',

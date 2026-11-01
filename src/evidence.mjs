@@ -62,7 +62,10 @@ export function laneCard(name) {
   return {
     lane: name,
     observations: { runs: obs.length, shadow: sh.length, enforce: enf.length,
-      first: obs[0]?.at ?? null, last: obs.at(-1)?.at ?? null,
+      // The window is the earliest and latest row, not the first and last read: a ledger
+      // holds one log per host, read file by file, so read order is not time order.
+      first: obs.length ? obs.reduce((a, r) => (r.at < a ? r.at : a), obs[0].at) : null,
+      last: obs.length ? obs.reduce((a, r) => (r.at > a ? r.at : a), obs[0].at) : null,
       meanSelected: mean(obs.filter((r) => num(r.files)).map((r) => num(r.must_run) / num(r.files))),
       meanTimePct: mean(obs.map((r) => num(r.run_time_pct))) },
     misses: { checked, missed, rate: checked ? +(missed / checked).toFixed(4) : null, wilson95: wilson(missed, checked),

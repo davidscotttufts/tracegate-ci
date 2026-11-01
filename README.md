@@ -131,6 +131,29 @@ The plugin bundles:
   - Other repositories are not blocked.
   - `TRACEGATE_HOOK=off` turns it off.
 
+#### What the plugin runs, reads, writes and sends
+
+- **Runs:**
+  - `node` on the plugin's own files: the MCP server (`src/cli.mjs mcp`, over stdio) and the
+    hook (`hooks/lease-guard.mjs`). The hook runs `git rev-parse` to find the repository and
+    reads its `tracegate.config.json`.
+  - Through the CLI: `git`, and your test runner (Vitest or Jest) from your repository's
+    `node_modules`.
+  - The broker runs a lease's command with your shell, the same command you gave it.
+  - `tracegate attest` runs `ssh-keygen` or `gpg` to sign with your own git signing key.
+- **Reads:** the repository and its git history, the runner's V8 coverage, and the load and
+  memory figures of this machine (`ps`, `vm_stat`, `sysctl` and `pmset` on macOS, `/proc` on
+  Linux).
+- **Writes:** the ledger in the repository's git common directory (`.git/tracegate/`, with
+  the broker's log under it), run and train working directories and the broker's socket in
+  the OS temp directory, git notes under `refs/notes/tracegate` when you run `attest`, and
+  the files `init --write` says it will change. Nothing is pushed.
+- **Sends:** nothing by default. There is no telemetry and no network call. The broker
+  listens on a unix socket on this machine only. The one exception is opt-in:
+  `tracegate attest --status` posts a commit status to GitHub through your own `gh` login.
+- **Installs:** nothing at run time. The package has no runtime dependencies. The lockfile
+  pins one development dependency (TypeScript, for the tests).
+
 ## Usage
 
 ### 1. Install and wire the recorder
