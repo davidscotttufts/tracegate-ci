@@ -8,5 +8,5 @@ export {
 export { replay } from './replay.mjs';
 export { sync } from './sync.mjs';
 export { runLane } from './run.mjs';
-export { installRecorder, ModuleMap } from './recorder.mjs';
+export { installRecorder, ModuleMap, recordKeyRead } from './recorder.mjs';
 export { initialState, apply, schedule, explain, snapshot, DEFAULT_CLASSES, PREEMPT_GAP } from './broker/core.mjs';

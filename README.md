@@ -199,6 +199,7 @@ A **lane** is one Vitest project. `tracegate.config.json` at the repository root
 | `lanes.<l>.entryBar` | — | Per-lane override of the bar. A shorter `days` is an **early entry**; `earlyAudit` is the audit rate until the default bar's `days` would have been met. |
 | `lanes.<l>.lockfile` | auto | The lockfile hashed into every footprint (default: the first of `package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`, `yarn.lock` in `dir`, then at the root). |
 | `lanes.<l>.replayExclude` | `[]` | Test-file patterns `replay` must not list (e.g. an e2e folder Vitest does not run). |
+| `lanes.<l>.preSelect` | — | A command that may **add** files to an enforce selection. It gets `{ lane, head, tree, files, selected, reused }` as JSON on stdin and prints test files (repo paths, one per line) that must run too. It can never remove one; a hook that fails, times out (120 s) or names a file that is not a test of the lane runs the lane whole. |
 | `entryBar` | `{ "days": 14, "observations": 20 }` | Enforce only after this many observations over this many days, with no un-triaged miss. |
 | `audit` | `0.05` | Share of reusable verdicts re-run anyway, uniformly at random. |
 | `missSuspendDays` | `14` | How long a miss suspends enforcement. |
@@ -700,6 +701,23 @@ Changes are attributed **per character** to their owner: the innermost function,
 kind of top-level statement (import/type → ignored; plain-data `const X` → a constant;
 anything else → top level). Anonymous callbacks are keyed by callee and first string
 argument, so one route handler is one key.
+
+**Keyed inputs.** A data file read in full is an input as a whole: any edit to it runs
+every test that read it. A plugin that serves a table to tests by key (an i18n catalog
+through `t()`, a feature-flag file) can narrow that by calling `recordKeyRead(file, key)`
+from `tracegate-ci/recorder` on each lookup:
+
+```js
+import { recordKeyRead } from 'tracegate-ci/recorder';
+const t = (key) => { recordKeyRead('src/locales/en.json', key); return messages[key]; };
+```
+
+A change to that JSON file then re-runs only the tests that read a key whose value
+changed (a key is looked up as a whole property name first, so `greet.hello` works, then
+as a dotted path into nested objects). A test with no recorded keys for the file keeps
+the whole-file rule, and so does a test whose code imports the JSON itself. Call it only
+for reads your plugin makes on the test's behalf: a test that reads the file in full with
+`fs` cannot be told apart from the plugin.
 
 **What a footprint does not see**: environment variables, the wall clock (hence the 72 h
 limit), the network and other processes. The random audit and the periodic full run are

@@ -87,7 +87,7 @@ const tmpRun = () => fs.mkdtempSync(path.join(os.tmpdir(), 'tracegate-run-'));
 const recordAt = (exec, o = {}) => {
   const r = tmpRun();
   fs.mkdirSync(path.join(r, 'raw'));
-  fs.writeFileSync(path.join(r, 'raw', 'x.json'), JSON.stringify({ v: 1, testFile: TEST, node: process.version, loaded: LOADED, exec, unmapped: [], reads: ['data/read.json'] }));
+  fs.writeFileSync(path.join(r, 'raw', 'x.json'), JSON.stringify({ v: 1, testFile: TEST, node: process.version, loaded: LOADED, exec, unmapped: [], reads: ['data/read.json'], ...(o.raw ?? {}) }));
   fs.writeFileSync(path.join(r, 'results.json'), o.status === 'failed'
     ? JSON.stringify({ testResults: [{ name: path.join(repo, TEST), status: 'failed', startTime: 0, endTime: 10, assertionResults: [] }] })
     : passedResult([TEST]));
@@ -411,6 +411,86 @@ fs.rmSync(fullLog);
   check('replay before any footprint existed sees none, and counts it as replaced', r3.mustRun === 1 && r3.top[0]?.[0] === 'no footprint' && r3.evicted === 1, JSON.stringify(r3));
   const after = decideApi(RH);
   check('replay leaves the live decision untouched', after.run === live.run && after.reason === live.reason, JSON.stringify({ live, after }));
+}
+
+// ── keyed inputs: a data file read by key re-runs only on a key it read ─────
+{
+  const CAT = 'data/i18n.json';
+  // decide() reuses a verdict when ANY stored footprint allows it, so each case starts
+  // from this test's one new footprint, not from the ones recorded before it.
+  const only = (raw) => { fs.rmSync(path.join(ledger, 'fp', 'api'), { recursive: true, force: true }); recordAt(execAt(fs.readFileSync(path.join(repo, SRC), 'utf8')), { raw }); };
+  const cat = (o) => w(CAT, JSON.stringify({ 'greet.hello': 'Hello', 'greet.bye': 'Bye', nested: { a: 1, b: 2 }, ...o }, null, 1) + '\n');
+  cat({}); commit('a keyed catalog');
+  only({ reads: ['data/read.json', CAT], keyReads: { [CAT]: ['greet.hello', 'nested.a'] } });
+  cat({ 'greet.bye': 'Goodbye', nested: { a: 1, b: 3 } }); commit('keys the test did not read');
+  const d1 = decideApi();
+  check('keyed: a change only to keys the test never read reuses its verdict', d1.run === false, JSON.stringify(d1));
+  cat({ 'greet.hello': 'Hi', 'greet.bye': 'Goodbye' }); commit('a key the test read');
+  const d2 = decideApi();
+  check('keyed: a change to a key it read (a dotted name, held whole) runs it, and names the key', d2.run === true && /read key greet\.hello in data\/i18n\.json/.test(d2.reason), JSON.stringify(d2));
+  cat({}); commit('back');
+  only({ reads: ['data/read.json', CAT], keyReads: { [CAT]: ['nested.a'] } });
+  cat({ nested: { a: 9, b: 2 } }); commit('a nested key the test read');
+  check('keyed: a dotted path reaches into nested objects', /read key nested\.a/.test(decideApi().reason ?? ''), JSON.stringify(decideApi()));
+  cat({}); commit('back again');
+  only({ reads: ['data/read.json', CAT] });
+  cat({ 'greet.bye': 'Later' }); commit('no keys recorded');
+  check('keyed: with no keys recorded, the whole-file rule stands', /^read input data\/i18n\.json/.test(decideApi().reason ?? ''), JSON.stringify(decideApi()));
+  // A test that imports the JSON itself read all of it, whatever keys a plugin saw.
+  const testBefore = fs.readFileSync(path.join(repo, TEST), 'utf8');
+  w(TEST, `import cat from '../../../${CAT}';\n` + testBefore); cat({}); commit('the test imports the catalog');
+  only({ keyReads: { [CAT]: ['greet.hello'] } });
+  cat({ 'greet.bye': 'Bye now' }); commit('an unread key, in an imported catalog');
+  check('keyed: an IMPORTED json keeps the whole-file rule', /^read input data\/i18n\.json/.test(decideApi().reason ?? ''), JSON.stringify(decideApi()));
+  w(TEST, testBefore); commit('the test no longer imports it');
+}
+
+// ── the recorder writes the keys a plugin reported into the raw footprint ───
+{
+  const { recordKeyRead, takeFootprint } = await import('../src/recorder.mjs');
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'tracegate-keys-'));
+  fs.mkdirSync(path.join(out, 'raw'));
+  const saved = globalThis.__tracegate;
+  const st = { session: { post: async () => ({ result: [] }) }, repoRoot: repo, srcPrefix: 'packages/api/src/', modules: new Map(), reads: new Set(), keyReads: new Map(), pkgReads: new Set(), pkgsKnown: true, outDir: out, write: fs.writeFileSync };
+  globalThis.__tracegate = st;
+  try {
+    recordKeyRead(path.join(repo, 'data/i18n.json'), 'greet.hello');
+    recordKeyRead('./data/i18n.json', 'nested.a');
+    recordKeyRead('data/i18n.json', 'greet.hello');
+    recordKeyRead('/elsewhere/x.json', 'k');
+    recordKeyRead('../outside.json', 'k');
+    await takeFootprint(st, path.join(repo, TEST));
+  } finally { globalThis.__tracegate = saved; }
+  const raw = JSON.parse(fs.readFileSync(path.join(out, 'raw', fs.readdirSync(path.join(out, 'raw'))[0]), 'utf8'));
+  check('recordKeyRead: keys land in the raw footprint per repo path, deduplicated; paths outside the repo are dropped', JSON.stringify(raw.keyReads) === JSON.stringify({ 'data/i18n.json': ['greet.hello', 'nested.a'] }), JSON.stringify(raw.keyReads));
+  fs.rmSync(out, { recursive: true, force: true });
+}
+
+// ── the pre-select hook adds files, never removes; a failure runs the lane ──
+{
+  recordAt(execAt(fs.readFileSync(path.join(repo, SRC), 'utf8')));
+  // The hook's config lives OUTSIDE the repo (TRACEGATE_CONFIG): editing the repo's own
+  // tracegate.config.json is a global input change, and would run every file anyway.
+  const cfg0 = fs.readFileSync(path.join(repo, 'tracegate.config.json'), 'utf8');
+  const cfgPath = path.join(os.tmpdir(), `tg-hook-config-${process.pid}.json`);
+  const withHook = (cmd) => { const c = JSON.parse(cfg0); c.lanes.api.preSelect = cmd; fs.writeFileSync(cfgPath, JSON.stringify(c)); process.env.TRACEGATE_CONFIG = cfgPath; tg.resetContext(); };
+  const sel = () => { const r = tmpRun(); const o = tg.select({ lane: 'api', run: r, mode: 'enforce', audit: '0' }); const p = JSON.parse(fs.readFileSync(path.join(r, 'predict.json'), 'utf8')); fs.rmSync(r, { recursive: true, force: true }); return { ...o, p }; };
+  const base0 = sel();
+  check('hook: without one, the recorded test is reused', !base0.selected.includes(TEST), JSON.stringify(base0.selected));
+  const seen = path.join(os.tmpdir(), `tg-hook-${process.pid}.json`);
+  withHook(`node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{require("fs").writeFileSync(${JSON.stringify(seen)},s);console.log(${JSON.stringify(TEST)})})'`);
+  const h1 = sel(); const input = JSON.parse(fs.readFileSync(seen, 'utf8'));
+  check('hook: a file it names runs, marked as the hook\'s', h1.selected.includes(TEST) && h1.p.decisions[TEST].reason === 'pre-select hook' && input.reused.includes(TEST) && input.lane === 'api', JSON.stringify({ sel: h1.selected, d: h1.p.decisions[TEST] }));
+  withHook('true');
+  const h2 = sel();
+  check('hook: naming nothing removes nothing', h2.selected.join() === base0.selected.join());
+  withHook('exit 3');
+  const h3 = sel();
+  check('hook: a hook that fails runs the whole lane', h3.selected.length === h3.files && /pre-select hook failed: exit 3/.test(h3.p.decisions[TEST].reason), JSON.stringify(h3.p.decisions[TEST]));
+  withHook('echo packages/api/src/a.ts');
+  const h4 = sel();
+  check('hook: naming a file that is not a test of the lane is a failure, not a selection', h4.selected.length === h4.files && /not test files of the lane/.test(h4.p.decisions[TEST].reason), JSON.stringify(h4.p.decisions[TEST]));
+  delete process.env.TRACEGATE_CONFIG; tg.resetContext(); fs.rmSync(cfgPath, { force: true }); fs.rmSync(seen, { force: true });
 }
 
 // ── sync: two ledgers become their union; each keeps its own log name ────────

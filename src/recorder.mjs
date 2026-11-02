@@ -118,7 +118,7 @@ export async function installRecorder({ afterAll, expect, repoRoot, srcPrefix })
   // it, and whatever ran in between (its teardown, these setup files) is then
   // counted for this file. That can only ADD functions to a footprint, i.e. cause
   // extra runs, never hide one; and it saves one coverage take per file.
-  st.reads.clear();
+  st.reads.clear(); st.keyReads.clear();
   afterAll(() => takeFootprint(st, expect.getState().testPath ?? ''));
 }
 
@@ -171,6 +171,7 @@ export async function takeFootprint(st, testPath) {
     }
     const testFile = testPath.startsWith(st.repoRoot + '/') ? testPath.slice(st.repoRoot.length + 1) : testPath;
     const out = { v: 2, testFile, node: process.version, loaded: [...new Set(loaded)].sort(), exec, unmapped, reads: [...st.reads].sort(), pkgs: pkgsKnown ? [...pkgs].sort() : null };
+    if (st.keyReads.size) out.keyReads = Object.fromEntries([...st.keyReads].sort(([a], [b]) => (a < b ? -1 : 1)).map(([f, ks]) => [f, [...ks].sort()]));
     const name = createHash('sha256').update(testFile).digest('hex').slice(0, 24) + '.json';
     st.write(path.join(st.outDir, 'raw', name), JSON.stringify(out));
   }
@@ -261,5 +262,29 @@ async function init(outDir, repoRoot, srcPrefix, callCount = false) {
   syncBuiltinESMExports();
 
   fs.mkdirSync(path.join(outDir, 'raw'), { recursive: true });
-  return { session, reads, modules, repoRoot, srcPrefix, outDir, write, pkgReads, get pkgsKnown() { return st0.pkgsKnown; } };
+  return { session, reads, keyReads: new Map(), modules, repoRoot, srcPrefix, outDir, write, pkgReads, get pkgsKnown() { return st0.pkgsKnown; } };
+}
+
+/**
+ * Keyed inputs: tell Tracegate that the current test read `key` of the data file
+ * `file` (a repo path, absolute or relative to the root). A plugin that serves a
+ * table to tests by key (an i18n catalog through `t()`, a feature-flag file) calls
+ * it on every lookup. A change to that file then re-runs only the tests that read a
+ * key whose value changed; a test with no recorded keys for it keeps the whole-file
+ * rule. Only JSON files are compared by key. A no-op unless the recorder is on.
+ *
+ * Call it only for files your plugin reads on the test's behalf: a test that reads
+ * the file in full itself (imports the JSON, or reads it with fs) must not be
+ * narrowed to the keys the plugin saw. An imported JSON file is detected and keeps
+ * the whole-file rule; a direct fs read cannot be told apart.
+ */
+export function recordKeyRead(file, key) {
+  const st = globalThis.__tracegate;
+  if (!st?.keyReads || typeof file !== 'string' || typeof key !== 'string' || !key) return;
+  const root = st.repoRoot + '/';
+  const rel = path.isAbsolute(file) ? (file.startsWith(root) ? file.slice(root.length) : null) : file.replace(/^\.\//, '');
+  if (!rel || rel.startsWith('../')) return;
+  let ks = st.keyReads.get(rel);
+  if (!ks) st.keyReads.set(rel, (ks = new Set()));
+  ks.add(key);
 }

@@ -116,6 +116,7 @@ function buildLane(name, raw, cfg) {
     bar,
     lockfile: raw.lockfile ?? null,
     runner: raw.runner ?? 'vitest',
+    preSelect: typeof raw.preSelect === 'string' && raw.preSelect.trim() ? raw.preSelect : null,
     replayExclude: (raw.replayExclude ?? []).map((g) => new RegExp('^' + (dir ? `${dir}/` : '') + patternSource(g))),
   };
 }

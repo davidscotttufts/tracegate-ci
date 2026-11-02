@@ -20,7 +20,7 @@
 // It can never turn a red into a green: a failing file's footprints are dropped,
 // a tree that moved during the run is refused at ingest, footprints older than
 // maxAgeHours are never reused, and any predictor error means "run".
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -149,12 +149,15 @@ export function ingest(o) {
     const loaded = new Set(raw.loaded);
     const defs = [];
     const reads = new Set(raw.reads);
+    const imported = new Set(); // JSON a module imports is read whole, whatever keys a plugin saw
     for (const file of raw.loaded) {
       const fi = isTsFile(file) ? fileInfo(ln, file) : null;
       if (!fi) continue;
       for (const d of fi.defs) defs.push(d);
-      for (const j of fi.jsonImports) reads.add(j);
+      for (const j of fi.jsonImports) { reads.add(j); imported.add(j); }
     }
+    const keyed = Object.entries(raw.keyReads ?? {}).filter(([f, ks]) => f.endsWith('.json') && !imported.has(f) && Array.isArray(ks) && ks.length);
+    for (const [f] of keyed) reads.add(f);
     const referenced = (name) => {
       if (idents.has(name)) return true;
       const files = refFiles.get(name);
@@ -176,6 +179,7 @@ export function ingest(o) {
       v: FP_VERSION, lane: ln.name, testFile: raw.testFile, commit: H, node: raw.node, lock,
       loaded: putBlob(raw.loaded), reads: putBlob([...reads].sort()), unmapped: raw.unmapped,
       ...(Array.isArray(raw.pkgs) && runnerBlob ? { pkgs: putBlob(raw.pkgs), runnerPkgs: runnerBlob } : {}),
+      ...(keyed.length ? { keyReads: putBlob(Object.fromEntries(keyed)) } : {}),
       keys, consts: [...consts].sort(), durationMs: verdict.durationMs, recordedAt: new Date().toISOString(), host: c.host,
     });
     recorded++;
@@ -382,8 +386,8 @@ export function invalidates(ln, testFile, fp, H, nodeVersion, lock, info = {}) {
   if (fp.commit === H) return null;
   const ch = changesSince(fp.commit, H);
   if (!ch) return `footprint commit ${fp.commit.slice(0, 9)} unavailable`;
-  let loaded, reads;
-  try { loaded = new Set(getBlob(fp.loaded)); reads = getBlob(fp.reads); } catch { return 'footprint blob missing'; }
+  let loaded, reads, keyReads = {};
+  try { loaded = new Set(getBlob(fp.loaded)); reads = getBlob(fp.reads); if (fp.keyReads) keyReads = getBlob(fp.keyReads); } catch { return 'footprint blob missing'; }
   const consts = new Set(fp.consts);
   for (const c of ch) {
     const p = c.path;
@@ -414,9 +418,31 @@ export function invalidates(ln, testFile, fp, H, nodeVersion, lock, info = {}) {
       }
       continue;
     }
+    if (keyReads[p] && c.st !== 'D') {
+      // Keyed input: only the values this test looked up matter (recordKeyRead).
+      const moved = changedKey(p, keyReads[p], fp.commit, H);
+      if (moved === null) continue;
+      return `read key ${moved} in ${p}`;
+    }
     for (const r of reads) if (r === p || p.startsWith(r + '/')) return `read input ${p}`;
   }
   if (covered) info.deps = true;
+  return null;
+}
+
+/** The first of `keys` whose value differs in JSON file `p` between two commits, or
+ *  null when none does. A file that does not parse at either side is one change ('*').
+ *  A key is looked up as a whole property name first (i18n keys hold dots), then as a
+ *  dotted path. */
+function changedKey(p, keys, from, to) {
+  let a, b;
+  try { a = JSON.parse(showAt(from, p)); b = JSON.parse(showAt(to, p)); } catch { return '*'; }
+  const get = (o, k) => {
+    if (o && typeof o === 'object' && Object.hasOwn(o, k)) return o[k];
+    let v = o; for (const part of k.split('.')) { if (v === null || typeof v !== 'object' || !Object.hasOwn(v, part)) return undefined; v = v[part]; }
+    return v;
+  };
+  for (const k of keys) if (JSON.stringify(get(a, k)) !== JSON.stringify(get(b, k))) return k;
   return null;
 }
 
@@ -510,11 +536,25 @@ export function reasonKey(r) {
   return String(r)
     .replace(/^executed function .* in (\S+)$/, 'executed code in $1')
     .replace(/^constant \S+ in (\S+)$/, 'constant in $1')
+    .replace(/^read key .* in (\S+)$/, 'read keys in $1')
     .replace(/^footprint commit \S+ unavailable$/, 'footprint commit unavailable')
     .replace(/^lockfile changed: package \S+$/, 'lockfile changed: a package it loaded')
     .replace(/^predictor error: [\s\S]*/, 'predictor error');
 }
 export const REASONS_TOP = 10;
+
+/** Run a lane's pre-select hook: the selection as JSON on stdin, test files to add on
+ *  stdout (repo-relative, one per line). { files } or { error }. */
+function preSelectHook(ln, input) {
+  const r = spawnSync(ln.preSelect, { shell: true, cwd: ctx().root, input: JSON.stringify(input), encoding: 'utf8', timeout: 120_000, maxBuffer: 64 << 20, stdio: ['pipe', 'pipe', 'inherit'] });
+  if (r.error) return { error: r.error.code === 'ETIMEDOUT' ? 'timed out' : r.error.message };
+  if (r.status !== 0) return { error: `exit ${r.status}` };
+  const files = r.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+  const inLane = new Set(input.files);
+  const outside = files.filter((f) => !inLane.has(f));
+  if (outside.length) return { error: `named ${outside.length} file(s) that are not test files of the lane, e.g. ${outside[0]}` };
+  return { files };
+}
 export function select(o) {
   const ln = lane(o.lane);
   const run = o.run; if (!run || run === true) throw new Error('--run <dir> is required');
@@ -540,6 +580,20 @@ export function select(o) {
     out.decisions[f] = d;
     if (d.run) { const k = reasonKey(d.reason); why.set(k, (why.get(k) ?? 0) + 1); }
     if (mode !== 'enforce' || d.run || d.audit) selected.push(f);
+  }
+  // The lane's pre-select hook may ADD files to an enforce selection, never remove
+  // one. A hook that fails, times out or names a file outside the lane runs the lane whole.
+  if (mode === 'enforce' && ln.preSelect) {
+    const h = preSelectHook(ln, { lane: ln.name, head: H, tree: T.at, files, selected: [...selected], reused: files.filter((f) => !selected.includes(f)) });
+    const add = h.error ? files.filter((f) => !selected.includes(f)) : h.files.filter((f) => !selected.includes(f));
+    for (const f of add) {
+      out.decisions[f] = { ...out.decisions[f], run: true, reason: h.error ? `pre-select hook failed: ${h.error}` : 'pre-select hook', hook: true };
+      reuse--; // every added file was a reused verdict: audited ones are already selected
+      selected.push(f);
+      const k = h.error ? 'pre-select hook failed' : 'pre-select hook'; why.set(k, (why.get(k) ?? 0) + 1);
+    }
+    if (h.error) console.log(`tracegate (${ln.name}): the pre-select hook failed (${h.error}), so every file runs.`);
+    else if (add.length) console.log(`tracegate (${ln.name}): the pre-select hook added ${add.length} file(s).`);
   }
   const top = [...why].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).slice(0, REASONS_TOP);
   fs.mkdirSync(run, { recursive: true });
