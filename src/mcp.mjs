@@ -105,6 +105,13 @@ const READ_TOOLS = [
     annotations: { readOnlyHint: true },
     run: async ({ target }) => (await import('./train.mjs')).status({ target }),
   },
+  {
+    name: 'bus_status',
+    description: 'The release bus, when one is configured: the gates, trains, deploys and releases running on ANY machine that shares this repository (live or stale leases, with host, session, lane and PRs), and the latest start, end and note events. Read it before a train, deploy or release: a live lease from another machine means it is busy. Advisory: nothing waits on it. Returns { ok: false, why } when there is no bus or it is unreachable.',
+    inputSchema: { type: 'object', properties: { n: { type: 'integer', minimum: 1, maximum: 100 } }, additionalProperties: false },
+    annotations: { readOnlyHint: true },
+    run: async ({ n }) => (await import('./bus.mjs')).busStatus({ n }),
+  },
 ];
 
 const WRITE_TOOLS = [

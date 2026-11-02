@@ -116,6 +116,8 @@ function buildLane(name, raw, cfg) {
     bar,
     lockfile: raw.lockfile ?? null,
     runner: raw.runner ?? 'vitest',
+    preSelect: typeof raw.preSelect === 'string' && raw.preSelect.trim() ? raw.preSelect : null,
+    keyedExtract: typeof raw.keyedExtract === 'string' && raw.keyedExtract.trim() ? raw.keyedExtract : null,
     replayExclude: (raw.replayExclude ?? []).map((g) => new RegExp('^' + (dir ? `${dir}/` : '') + patternSource(g))),
   };
 }
@@ -153,6 +155,8 @@ export function ctx() {
     ingestBudgetSeconds: num('TRACEGATE_INGEST_BUDGET_S', 'ingestBudgetSeconds'),
     host: (process.env.TRACEGATE_HOST || os.hostname().split('.')[0] || 'host').replace(/[^A-Za-z0-9_-]/g, '_'),
     sync: cfg.sync ?? null,
+    bus: cfg.bus ?? null, // the release bus reads it (src/bus.mjs)
+    daemon: cfg.daemon ?? null, // `tracegate daemon` reads it (src/daemon.mjs)
     broker: cfg.broker ?? null, // the broker reads it (src/broker/paths.mjs)
     red: { ...DEFAULTS.red, ...(cfg.red ?? {}), ...(process.env.TRACEGATE_RED_ESCALATE ? { escalate: process.env.TRACEGATE_RED_ESCALATE !== 'off' } : {}) },
     deps: { ...DEFAULTS.deps, ...(cfg.deps ?? {}), bar: { ...DEFAULTS.deps.bar, ...(cfg.deps?.bar ?? {}) }, ...(process.env.TRACEGATE_DEPS ? { mode: process.env.TRACEGATE_DEPS } : {}) },

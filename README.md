@@ -199,6 +199,8 @@ A **lane** is one Vitest project. `tracegate.config.json` at the repository root
 | `lanes.<l>.entryBar` | — | Per-lane override of the bar. A shorter `days` is an **early entry**; `earlyAudit` is the audit rate until the default bar's `days` would have been met. |
 | `lanes.<l>.lockfile` | auto | The lockfile hashed into every footprint (default: the first of `package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`, `yarn.lock` in `dir`, then at the root). |
 | `lanes.<l>.replayExclude` | `[]` | Test-file patterns `replay` must not list (e.g. an e2e folder Vitest does not run). |
+| `lanes.<l>.keyedExtract` | — | A command that reads a non-JSON keyed table (text on stdin) and prints its values as a JSON object, for [keyed inputs](#how-a-decision-is-made) in tables written as code. |
+| `lanes.<l>.preSelect` | — | A command that may **add** files to an enforce selection. It gets `{ lane, head, tree, files, selected, reused }` as JSON on stdin and prints test files (repo paths, one per line) that must run too. It can never remove one; a hook that fails, times out (120 s) or names a file that is not a test of the lane runs the lane whole. |
 | `entryBar` | `{ "days": 14, "observations": 20 }` | Enforce only after this many observations over this many days, with no un-triaged miss. |
 | `audit` | `0.05` | Share of reusable verdicts re-run anyway, uniformly at random. |
 | `missSuspendDays` | `14` | How long a miss suspends enforcement. |
@@ -207,7 +209,9 @@ A **lane** is one Vitest project. `tracegate.config.json` at the repository root
 | `keepPerTest` | `6` | Footprints kept per test file. |
 | `ingestBudgetSeconds` | `300` | Ingest stops recording after this long (`TRACEGATE_INGEST_BUDGET_S`). |
 | `ledger` | `<git common dir>/tracegate` | Ledger directory, relative to the root (`TRACEGATE_LEDGER`). |
-| `sync` | — | Default `--remote` for `tracegate sync`. |
+| `sync` | — | Default `--remote` for `tracegate sync`: `[user@]host:/abs/ledger`, or `gs://bucket/prefix`. |
+| `daemon` | — | `tracegate daemon` settings: `window` (local hours, default `"1-6"`), `target` (`main`), `pregate` (`true`), `tokens` (`2`), `every` (minutes, `20`), `timeoutMin` (`120`), `gate` (the command; default `tracegate run`). |
+| `bus` | — | The release bus: `gs://bucket/prefix`, or a directory (`TRACEGATE_BUS`, `off` to disable). See [Two machines](#two-machines-the-release-bus). |
 
 Global inputs that are always included: in each lane dir `package.json`, lockfiles,
 `vitest.config.*`, `vitest.workspace.*`, `vitest.setup.*`, `vite.config.*`,
@@ -259,6 +263,11 @@ npx tracegate full-done --lane api                           # record a complete
 npx tracegate sync --remote user@host:/abs/path/.git/tracegate
 ```
 
+- **sync** exchanges the ledger with another machine, over rsync or through a `gs://`
+  prefix (no SSH between the machines). Footprints, blobs and red
+  and dependency packets are merged; every evidence log goes both ways, each machine
+  sending only its own (`<log>-<host>.tsv`). The train queue (`trainq-`) stays on its
+  machine, because another machine's queued PRs are not this one's to land.
 - **triage**: `hole` = a real footprint gap (fix the recorder); `flake` = the test fails on
   its own. Only `flake` lifts the suspension. Passing when re-run alone is not proof of a
   flake: read the failure. A wrong argument whose assertion depends on timing passes alone.
@@ -405,8 +414,8 @@ Details and the per-platform signals: [docs/design/broker.md §9](docs/design/br
 
 `tracegate mcp` is a Model Context Protocol server over stdio.
 
-- **Read-only tools:** `queue_status`, `explain_job`, `history`, `machine_load`, `lane_mode`, `red_runs` and `read_red`.
-- **With `--allow-write`:** `cancel_queued` (queued jobs only) and `annotate_red` (an escalate-only opinion).
+- **Read-only tools:** `queue_status`, `explain_job`, `history`, `machine_load`, `lane_mode`, `red_runs`, `read_red`, `deps_runs`, `read_deps`, `savings`, `report_card`, `train_status` and `bus_status` (what other machines are running).
+- **With `--allow-write`:** `cancel_queued` (queued jobs only), `annotate_red` and `annotate_deps` (escalate-only opinions), and `train_add`.
 
 Register it with Claude Code:
 
@@ -429,6 +438,71 @@ tier**.
 - A timeout (10 s) or invalid output leaves FIFO order.
 
 The advisor can never grant, preempt, add or remove a job.
+
+## Daemon: work for an idle machine
+
+`tracegate daemon tick` is one pass of background work, meant to run every 20 minutes:
+
+- **The full lane, at night.** When a lane's last complete full run is older than
+  `fullRunMaxHours`, and the local hour is inside `daemon.window` (default 1–6), it runs
+  the whole lane at the target branch's tip. A green run records the full run, so the
+  daily backstop does not land on somebody's gate during the day.
+- **Pre-gating the train queue.** Each PR queued with `tracegate train add` is run at its
+  pinned commit, once. When the train later gates the merge, those verdicts are waiting,
+  and only what the merge itself changed runs.
+
+Each piece runs in a throwaway worktree, never in your checkout, under a broker lease of
+class `daemon`. That class is preemptible: a gate, train or deploy takes the machine back
+at once. The piece is logged `yielded`, the tick stops, and a later tick tries again. A
+red or failed piece is not retried at the same commit. The worktree borrows the
+checkout's `node_modules`, so a piece whose lockfile differs from the installed one is
+skipped rather than run against the wrong packages.
+
+```sh
+npx tracegate daemon status            # installed?, what the next tick would do, recent pieces
+npx tracegate daemon tick --dry-run    # the plan, without running it
+npx tracegate daemon install           # a launchd agent (macOS) or systemd user timer (Linux)
+npx tracegate daemon install --print   # show the files instead of writing them
+npx tracegate daemon uninstall
+```
+
+The log is `daemon-<host>.tsv` in the ledger; it stays on its machine (`sync` leaves it).
+
+## Two machines: the release bus
+
+The broker coordinates one machine. When two machines work on one repository (two
+laptops, or a laptop and a build box), each can start a train or a deploy while the other's
+is running, and neither knows. The bus is a small shared record both read:
+
+```json
+{ "bus": "gs://my-team-release-bus/tracegate" }
+```
+
+- **Leases.** `tracegate train run` holds a `train` lease while it runs and publishes
+  start and end events: the PRs, the result, and the tree that landed. Your own scripts
+  can do the same: `tracegate bus claim --kind deploy` prints a lease id, and
+  `tracegate bus release <id> --result VERIFIED` ends it.
+- **Warnings, never waits.** Before a train gates, it prints a `WARN bus:` line for each
+  live lease another machine holds, and then carries on. Nothing on the bus ever waits
+  for, refuses or freezes another machine's work: the merge train's own
+  compare-and-swap already refuses to land on a target that moved.
+- **Stale is not busy.** A lease runs for about twice its kind's typical length. After
+  that it reads `STALE` and is never a warning, so a crashed train or a closed laptop
+  lid leaves no lock behind. A lease a day past its expiry is dropped.
+- **No lock, no failure.** The record is written by compare-and-swap on its generation
+  (`--if-generation-match` on GCS), so racing writers all land. Every call has one
+  deadline (`TRACEGATE_BUS_TIMEOUT_MS`, default 10 s). No gcloud, no login, offline or a
+  hung call all print `bus: unavailable (…)`, and the command keeps its own exit code.
+- **Notes.** `tracegate bus note --text "…" [--to <session|host|*>]` leaves a message for
+  sessions on the other machine. Anything shaped like a token or key is refused.
+- **See it.** `tracegate bus status` shows both machines' leases, live and stale, and
+  the latest events. Agents read the same through the `bus_status` MCP tool.
+- **Share the ledger through it.** `tracegate sync --remote gs://my-team-release-bus/ledger`
+  does what the rsync form does, with no SSH between the machines.
+
+GCS is reached through the `gcloud` CLI and its login. For a shared disk, or for tests,
+give a directory instead: there each write creates the next generation with `link(2)`,
+which only one writer can win.
 
 ## Red Reader
 
@@ -658,6 +732,35 @@ Changes are attributed **per character** to their owner: the innermost function,
 kind of top-level statement (import/type → ignored; plain-data `const X` → a constant;
 anything else → top level). Anonymous callbacks are keyed by callee and first string
 argument, so one route handler is one key.
+
+**Keyed inputs.** A data file read in full is an input as a whole: any edit to it runs
+every test that read it. A plugin that serves a table to tests by key (an i18n catalog
+through `t()`, a feature-flag file) can narrow that by calling `recordKeyRead(file, key)`
+from `tracegate-ci/recorder` on each lookup:
+
+```js
+import { recordKeyRead } from 'tracegate-ci/recorder';
+const t = (key) => { recordKeyRead('src/locales/en.json', key); return messages[key]; };
+```
+
+A change to that file then re-runs only the tests that read a key whose value changed (a
+key is looked up as a whole property name first, so `greet.hello` works, then as a
+dotted path into nested objects). Report the key `*` for a test that read the whole
+table: any edit to it runs that test.
+
+- **JSON** is compared directly. A test whose code imports the JSON itself read all of
+  it, and keeps the whole-file rule.
+- **A table written as code** (`export const messages = { … }` in an i18n module) needs
+  the lane's `keyedExtract` command: it gets the file's text on stdin (and its path in
+  `TRACEGATE_KEYED_FILE`) and prints the table's values as one JSON object. Without one,
+  the file is a plain whole-file input. Only an edit to the module's data is narrowed
+  by key: an edit to its code (a plural rule, a top-level call) follows the
+  [module rule](#how-a-decision-is-made). An extractor that fails counts as a change.
+- A test with no recorded keys for a file keeps the whole-file rule.
+
+Call it only for reads your plugin makes on the test's behalf: a test that reads the
+file in full with `fs`, or imports a code table directly, cannot be told apart from the
+plugin.
 
 **What a footprint does not see**: environment variables, the wall clock (hence the 72 h
 limit), the network and other processes. The random audit and the periodic full run are

@@ -1,7 +1,7 @@
 {
   "name": "tracegate",
   "displayName": "Tracegate CI",
-  "version": "0.9.2",
+  "version": "0.10.0",
   "description": "Local CI for agents: runs only the tests a change can affect once skipping has earned it, queues every agent's test runs on the machine, and lets a model make a red stricter, never greener.",
   "author": { "name": "David Tufts" },
   "homepage": "https://github.com/davidscotttufts/tracegate-ci",

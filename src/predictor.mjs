@@ -20,7 +20,7 @@
 // It can never turn a red into a green: a failing file's footprints are dropped,
 // a tree that moved during the run is refused at ingest, footprints older than
 // maxAgeHours are never reused, and any predictor error means "run".
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -149,12 +149,19 @@ export function ingest(o) {
     const loaded = new Set(raw.loaded);
     const defs = [];
     const reads = new Set(raw.reads);
+    const imported = new Set(); // JSON a module imports is read whole, whatever keys a plugin saw
     for (const file of raw.loaded) {
       const fi = isTsFile(file) ? fileInfo(ln, file) : null;
       if (!fi) continue;
       for (const d of fi.defs) defs.push(d);
-      for (const j of fi.jsonImports) reads.add(j);
+      for (const j of fi.jsonImports) { reads.add(j); imported.add(j); }
     }
+    // Every file a plugin reported is at least a whole-file input. It is narrowed to its
+    // keys only when they can be compared: JSON natively, anything else through the
+    // lane's `keyedExtract` command. An imported JSON was read whole.
+    const reported = Object.entries(raw.keyReads ?? {}).filter(([, ks]) => Array.isArray(ks) && ks.length);
+    for (const [f] of reported) reads.add(f);
+    const keyed = reported.filter(([f]) => (f.endsWith('.json') ? !imported.has(f) : !!ln.keyedExtract));
     const referenced = (name) => {
       if (idents.has(name)) return true;
       const files = refFiles.get(name);
@@ -176,6 +183,7 @@ export function ingest(o) {
       v: FP_VERSION, lane: ln.name, testFile: raw.testFile, commit: H, node: raw.node, lock,
       loaded: putBlob(raw.loaded), reads: putBlob([...reads].sort()), unmapped: raw.unmapped,
       ...(Array.isArray(raw.pkgs) && runnerBlob ? { pkgs: putBlob(raw.pkgs), runnerPkgs: runnerBlob } : {}),
+      ...(keyed.length ? { keyReads: putBlob(Object.fromEntries(keyed)) } : {}),
       keys, consts: [...consts].sort(), durationMs: verdict.durationMs, recordedAt: new Date().toISOString(), host: c.host,
     });
     recorded++;
@@ -382,8 +390,8 @@ export function invalidates(ln, testFile, fp, H, nodeVersion, lock, info = {}) {
   if (fp.commit === H) return null;
   const ch = changesSince(fp.commit, H);
   if (!ch) return `footprint commit ${fp.commit.slice(0, 9)} unavailable`;
-  let loaded, reads;
-  try { loaded = new Set(getBlob(fp.loaded)); reads = getBlob(fp.reads); } catch { return 'footprint blob missing'; }
+  let loaded, reads, keyReads = {};
+  try { loaded = new Set(getBlob(fp.loaded)); reads = getBlob(fp.reads); if (fp.keyReads) keyReads = getBlob(fp.keyReads); } catch { return 'footprint blob missing'; }
   const consts = new Set(fp.consts);
   for (const c of ch) {
     const p = c.path;
@@ -398,6 +406,15 @@ export function invalidates(ln, testFile, fp, H, nodeVersion, lock, info = {}) {
     const waived = covered && (p === covered || (path.posix.basename(p) === 'package.json' && depsOnlyPackageJson(showAt(fp.commit, p), showAt(H, p))));
     if (!waived && ln.global.test(p) && !isTestFile(p)) return `global input ${p}`;
     if (p === testFile) return 'the test file changed';
+    if (keyReads[p] && c.st !== 'D' && dataOnlyChange(ln, p, loaded, fp, H, c)) {
+      // Keyed input (recordKeyRead): only the values this test looked up matter. It
+      // comes before the loaded-module rule, because a table written as code (an i18n
+      // module) is also a loaded module; but only for an edit to its data. An edit to
+      // its code (a plural rule, a top-level call) falls through to the module rule.
+      const moved = changedKey(ln, p, keyReads[p], fp.commit, H);
+      if (moved === null) continue;
+      return `read key ${moved} in ${p}`;
+    }
     if (loaded.has(p)) {
       const isSrc = p.startsWith(ln.srcPrefix) && isTsFile(p) && !isTestFile(p);
       if (!isSrc) return `loaded module ${p}`;
@@ -418,6 +435,49 @@ export function invalidates(ln, testFile, fp, H, nodeVersion, lock, info = {}) {
   }
   if (covered) info.deps = true;
   return null;
+}
+
+/** The first of `keys` whose value differs in file `p` between two commits, or null
+ *  when none does. The key `*` means the test read the whole table: any edit counts.
+ *  JSON is parsed here; any other file goes through the lane's `keyedExtract` command
+ *  (the file's text on stdin, a JSON object of its values on stdout). A file that cannot
+ *  be read that way at either side is one change ('*'). A key is looked up as a whole
+ *  property name first (i18n keys hold dots), then as a dotted path. */
+function changedKey(ln, p, keys, from, to) {
+  const ta = showAt(from, p), tb = showAt(to, p);
+  if (keys.includes('*') && ta !== tb) return '*';
+  let a, b;
+  try { a = valuesOf(ln, p, ta); b = valuesOf(ln, p, tb); } catch { return '*'; }
+  const get = (o, k) => {
+    if (o && typeof o === 'object' && Object.hasOwn(o, k)) return o[k];
+    let v = o; for (const part of k.split('.')) { if (v === null || typeof v !== 'object' || !Object.hasOwn(v, part)) return undefined; v = v[part]; }
+    return v;
+  };
+  for (const k of keys) if (JSON.stringify(get(a, k)) !== JSON.stringify(get(b, k))) return k;
+  return null;
+}
+
+/** Did the edit to keyed file `p` touch only data? A non-module file is all data. In a
+ *  loaded TypeScript module, every changed part must be a constant, a blank line or a
+ *  type-only import; a model error is not data. */
+function dataOnlyChange(ln, p, loaded, fp, H, c) {
+  if (!loaded.has(p) || !isTsFile(p)) return true;
+  try { return [...changedKeys(fp.commit, H, c)].every((k) => k === '<blank>' || k === '<import>' || k.startsWith('<const:')); } catch { return false; }
+}
+
+const _values = new Map(); // (lane, file, text hash) → values: one extractor run per table version
+function valuesOf(ln, p, text) {
+  if (text === null) return null;
+  if (p.endsWith('.json')) return JSON.parse(text);
+  if (!ln.keyedExtract) throw new Error('no keyedExtract');
+  const k = `${ln.name}\0${p}\0${hash16(text)}`;
+  if (_values.has(k)) return _values.get(k);
+  const r = spawnSync(ln.keyedExtract, { shell: true, cwd: ctx().root, input: text, encoding: 'utf8', timeout: 60_000, maxBuffer: 64 << 20, env: { ...process.env, TRACEGATE_KEYED_FILE: p }, stdio: ['pipe', 'pipe', 'inherit'] });
+  if (r.error || r.status !== 0) throw new Error(`keyedExtract failed on ${p}`);
+  const v = JSON.parse(r.stdout);
+  if (!v || typeof v !== 'object') throw new Error('keyedExtract printed no object');
+  _values.set(k, v);
+  return v;
 }
 
 // The dependency rule's bar, read once per selection rather than once per file.
@@ -510,11 +570,25 @@ export function reasonKey(r) {
   return String(r)
     .replace(/^executed function .* in (\S+)$/, 'executed code in $1')
     .replace(/^constant \S+ in (\S+)$/, 'constant in $1')
+    .replace(/^read key .* in (\S+)$/, 'read keys in $1')
     .replace(/^footprint commit \S+ unavailable$/, 'footprint commit unavailable')
     .replace(/^lockfile changed: package \S+$/, 'lockfile changed: a package it loaded')
     .replace(/^predictor error: [\s\S]*/, 'predictor error');
 }
 export const REASONS_TOP = 10;
+
+/** Run a lane's pre-select hook: the selection as JSON on stdin, test files to add on
+ *  stdout (repo-relative, one per line). { files } or { error }. */
+function preSelectHook(ln, input) {
+  const r = spawnSync(ln.preSelect, { shell: true, cwd: ctx().root, input: JSON.stringify(input), encoding: 'utf8', timeout: 120_000, maxBuffer: 64 << 20, stdio: ['pipe', 'pipe', 'inherit'] });
+  if (r.error) return { error: r.error.code === 'ETIMEDOUT' ? 'timed out' : r.error.message };
+  if (r.status !== 0) return { error: `exit ${r.status}` };
+  const files = r.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+  const inLane = new Set(input.files);
+  const outside = files.filter((f) => !inLane.has(f));
+  if (outside.length) return { error: `named ${outside.length} file(s) that are not test files of the lane, e.g. ${outside[0]}` };
+  return { files };
+}
 export function select(o) {
   const ln = lane(o.lane);
   const run = o.run; if (!run || run === true) throw new Error('--run <dir> is required');
@@ -540,6 +614,20 @@ export function select(o) {
     out.decisions[f] = d;
     if (d.run) { const k = reasonKey(d.reason); why.set(k, (why.get(k) ?? 0) + 1); }
     if (mode !== 'enforce' || d.run || d.audit) selected.push(f);
+  }
+  // The lane's pre-select hook may ADD files to an enforce selection, never remove
+  // one. A hook that fails, times out or names a file outside the lane runs the lane whole.
+  if (mode === 'enforce' && ln.preSelect) {
+    const h = preSelectHook(ln, { lane: ln.name, head: H, tree: T.at, files, selected: [...selected], reused: files.filter((f) => !selected.includes(f)) });
+    const add = h.error ? files.filter((f) => !selected.includes(f)) : h.files.filter((f) => !selected.includes(f));
+    for (const f of add) {
+      out.decisions[f] = { ...out.decisions[f], run: true, reason: h.error ? `pre-select hook failed: ${h.error}` : 'pre-select hook', hook: true };
+      reuse--; // every added file was a reused verdict: audited ones are already selected
+      selected.push(f);
+      const k = h.error ? 'pre-select hook failed' : 'pre-select hook'; why.set(k, (why.get(k) ?? 0) + 1);
+    }
+    if (h.error) console.log(`tracegate (${ln.name}): the pre-select hook failed (${h.error}), so every file runs.`);
+    else if (add.length) console.log(`tracegate (${ln.name}): the pre-select hook added ${add.length} file(s).`);
   }
   const top = [...why].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).slice(0, REASONS_TOP);
   fs.mkdirSync(run, { recursive: true });

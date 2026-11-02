@@ -589,6 +589,96 @@ what the plugin runs, reads, writes and sends, and `displayName`, `documentation
 **Left to the owner:** submit the plugin to the directory, and triage the 52 untriaged
 backend misses in the host project, then regenerate the card.
 
+### Phase 5 — Two machines: every log syncs (done 2026-11-02, v0.10.0)
+
+**Why.** The host project is worked on from two Macs that share one ledger through
+`tracegate sync`. `sync` still carried only the five logs it was written with. Everything
+added since stayed on the machine that wrote it: escalations, approved skips, green rows
+for `attest`, opinions, conductor scores, red and dependency packets. An escalation on one
+Mac therefore never suspended the lane on the other, which is the guarantee escalation
+exists to give.
+
+**What:** every log is classified as shared or machine-local (only `trainq-`, this
+machine's work list, is local), the packet directories are merged like footprints, and
+the self-test fails on any log the code writes that is in neither list. Witnesses:
+`sync-shares-escalations`, `sync-keeps-trainq-local`, `sync-carries-packets`.
+
+### Phase 6 — The release bus: see the other machine (done 2026-11-02, v0.10.0)
+
+**Why.** The broker sees one machine. On 2026-10-12 the host project's second Mac merged
+five PRs and deployed while a merge-train gate ran on the first; the gate went green and
+then had to refuse to merge. The host project answered with its own release bus (its
+ADR 0991): leases and events in a shared GCS bucket, advisory only. That part is not
+specific to the host, and no tool in the competitive analysis coordinates agents' CI
+across machines.
+
+**What** (`src/bus.mjs`, `tracegate bus …`):
+- A `bus` setting: a GCS bucket through the `gcloud` CLI, or a plain directory (a shared
+  disk, and every test).
+- Leases: `claim` / `release` with a lease time about twice the typical duration; an
+  expired lease reads STALE and never holds anything. Writes use optimistic concurrency
+  (a generation precondition on GCS, an atomic rename in a directory), never a lock.
+- Events: one create-only JSON object per start, result and end.
+- `tracegate train run` holds a `gate` lease and publishes its start and result; before
+  gating it warns about a live lease from another machine. `tracegate bus status` shows
+  both machines.
+- **Never block, never fail the caller.** One overall deadline; no CLI, no login, offline
+  or a malformed record all read `bus: unavailable` and the command carries on. This
+  matches the host project's rule that nothing may freeze another machine's work.
+- Later in the phase: `sync` over the bus (footprints are content-addressed and logs are
+  per host, so a union through the bucket is as safe as rsync, and needs no SSH between
+  the machines).
+
+**Witnesses:** `bus-stale-never-warns`, `bus-cas-retries` (eight writers racing on one
+record all land), `bus-never-throws`, `bus-is-advisory` (a train warns and lands anyway),
+`bus-refuses-secrets`, `bus-sync-no-clobber`. `test/bus.mjs` runs both stores, the
+GCS one through a fake `gcloud` that enforces generations as GCS does; the `gcloud`
+flags used were checked against the installed CLI (576.0.0).
+
+**Shipped as planned, plus:** `tracegate bus note`, and the `bus_status` MCP read tool.
+
+### Phase 7 — Extension points, then the host project adopts the package (package side done 2026-11-02, v0.10.0)
+
+**Why.** The host project still runs its own predictor (about 1,200 lines) beside
+vendored copies of this package's broker and Red Reader. The two have already drifted
+(Phase 5 is one symptom), and its report card had to be generated through a borrowed
+config. It keeps its own predictor only for features this package cannot express (the
+host's ADR 0980 P4):
+- **A higher audit rate until a lane would have met the full bar** (20% instead of 5%),
+  for a lane let in early on a shorter bar. *Correction (2026-11-02): this already
+  existed, as `entryBar.earlyAudit` on a lane, with a test and a witness. Listing it as
+  missing came from reading the host's ADR, not this code.*
+- **A pre-select hook:** a module the lane names that may add files to a selection (the
+  host's date-bomb sweep coupling). It can only add, never remove.
+- **Keyed inputs:** a recorder plugin can report the keys a test read from a data file
+  (the host's per-key i18n), and a change to that file invalidates only tests that read
+  a changed key. Without the plugin the whole-file rule stands.
+- **`tracegate daemon`:** a launchd/systemd tick that runs the nightly full lane and
+  pre-gates open PR heads on an idle machine, under a preemptible broker lease that
+  yields to any gate (the host's `tracegate-daemon.sh`).
+
+**Then** the host project decides, in its own ADR, whether to replace its predictor
+with this package. That is its decision and its gate; this phase only removes the
+reasons it could not.
+
+**Shipped:** `recordKeyRead` (keyed inputs: JSON compared by key between the
+footprint's commit and the tree under test, and a table written as code through the
+lane's `keyedExtract` command, narrowed only for edits to its data; `*` is a whole-table
+read; an imported JSON keeps the whole-file rule). The code-table half was added after
+reading the host's i18n tracker: its tables are TypeScript modules, not JSON, so a
+JSON-only rule would not have let it retire anything.
+Also shipped:
+`lanes.<l>.preSelect` (adds only; a failing hook runs the lane whole), and
+`tracegate daemon` (`tick`, `status`, `install` for launchd and systemd). Witnesses:
+`keyed-compares-values`, `keyed-imported-is-whole`, `keyed-code-falls-back`,
+`keyed-star-is-whole`, `keyed-needs-a-reader`, `hook-failure-runs-all`,
+`hook-lane-files-only`, `daemon-in-a-worktree`, `daemon-skips-other-lockfile`,
+`daemon-retries-yielded`, `daemon-window-wraps`.
+
+**Not ported:** the host daemon's pre-gating of every open PR head through GitHub. Here
+it pre-gates what is queued for the train, which needs no forge API; a host that wants
+open PRs can `train add` them.
+
 ### v1.0 criteria (status 2026-11-02)
 
 - [x] CLI and MCP surface documented (README, `tracegate --help`, MCP tool descriptions).

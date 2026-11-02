@@ -87,7 +87,7 @@ const tmpRun = () => fs.mkdtempSync(path.join(os.tmpdir(), 'tracegate-run-'));
 const recordAt = (exec, o = {}) => {
   const r = tmpRun();
   fs.mkdirSync(path.join(r, 'raw'));
-  fs.writeFileSync(path.join(r, 'raw', 'x.json'), JSON.stringify({ v: 1, testFile: TEST, node: process.version, loaded: LOADED, exec, unmapped: [], reads: ['data/read.json'] }));
+  fs.writeFileSync(path.join(r, 'raw', 'x.json'), JSON.stringify({ v: 1, testFile: TEST, node: process.version, loaded: LOADED, exec, unmapped: [], reads: ['data/read.json'], ...(o.raw ?? {}) }));
   fs.writeFileSync(path.join(r, 'results.json'), o.status === 'failed'
     ? JSON.stringify({ testResults: [{ name: path.join(repo, TEST), status: 'failed', startTime: 0, endTime: 10, assertionResults: [] }] })
     : passedResult([TEST]));
@@ -413,6 +413,124 @@ fs.rmSync(fullLog);
   check('replay leaves the live decision untouched', after.run === live.run && after.reason === live.reason, JSON.stringify({ live, after }));
 }
 
+// ── keyed inputs: a data file read by key re-runs only on a key it read ─────
+{
+  const CAT = 'data/i18n.json';
+  // decide() reuses a verdict when ANY stored footprint allows it, so each case starts
+  // from this test's one new footprint, not from the ones recorded before it.
+  const only = (raw) => { fs.rmSync(path.join(ledger, 'fp', 'api'), { recursive: true, force: true }); recordAt(execAt(fs.readFileSync(path.join(repo, SRC), 'utf8')), { raw }); };
+  const cat = (o) => w(CAT, JSON.stringify({ 'greet.hello': 'Hello', 'greet.bye': 'Bye', nested: { a: 1, b: 2 }, ...o }, null, 1) + '\n');
+  cat({}); commit('a keyed catalog');
+  only({ reads: ['data/read.json', CAT], keyReads: { [CAT]: ['greet.hello', 'nested.a'] } });
+  cat({ 'greet.bye': 'Goodbye', nested: { a: 1, b: 3 } }); commit('keys the test did not read');
+  const d1 = decideApi();
+  check('keyed: a change only to keys the test never read reuses its verdict', d1.run === false, JSON.stringify(d1));
+  cat({ 'greet.hello': 'Hi', 'greet.bye': 'Goodbye' }); commit('a key the test read');
+  const d2 = decideApi();
+  check('keyed: a change to a key it read (a dotted name, held whole) runs it, and names the key', d2.run === true && /read key greet\.hello in data\/i18n\.json/.test(d2.reason), JSON.stringify(d2));
+  cat({}); commit('back');
+  only({ reads: ['data/read.json', CAT], keyReads: { [CAT]: ['nested.a'] } });
+  cat({ nested: { a: 9, b: 2 } }); commit('a nested key the test read');
+  check('keyed: a dotted path reaches into nested objects', /read key nested\.a/.test(decideApi().reason ?? ''), JSON.stringify(decideApi()));
+  cat({}); commit('back again');
+  only({ reads: ['data/read.json', CAT] });
+  cat({ 'greet.bye': 'Later' }); commit('no keys recorded');
+  check('keyed: with no keys recorded, the whole-file rule stands', /^read input data\/i18n\.json/.test(decideApi().reason ?? ''), JSON.stringify(decideApi()));
+  // A test that imports the JSON itself read all of it, whatever keys a plugin saw.
+  const testBefore = fs.readFileSync(path.join(repo, TEST), 'utf8');
+  w(TEST, `import cat from '../../../${CAT}';\n` + testBefore); cat({}); commit('the test imports the catalog');
+  only({ keyReads: { [CAT]: ['greet.hello'] } });
+  cat({ 'greet.bye': 'Bye now' }); commit('an unread key, in an imported catalog');
+  check('keyed: an IMPORTED json keeps the whole-file rule', /^read input data\/i18n\.json/.test(decideApi().reason ?? ''), JSON.stringify(decideApi()));
+  w(TEST, testBefore); commit('the test no longer imports it');
+}
+
+// ── keyed inputs in a table written as code, through the lane's extractor ───
+{
+  const TBL = 'packages/api/src/i18n.ts';
+  const tbl = (o) => w(TBL, 'export const messages = {\n' + Object.entries({ hello: 'Hello', bye: 'Bye', ...o }).map(([k, v]) => `  ${k}: '${v}',`).join('\n') + '\n};\n');
+  const ex = path.join(os.tmpdir(), `tg-extract-${process.pid}.mjs`);
+  fs.writeFileSync(ex, "let s = ''; process.stdin.on('data', (d) => { s += d; }).on('end', () => { if (s.includes('BROKEN')) process.exit(1); const o = {}; for (const m of s.matchAll(/(\\w+): '([^']*)'/g)) o[m[1]] = m[2]; console.log(JSON.stringify(o)); });\n");
+  const cfgPath = path.join(os.tmpdir(), `tg-keyed-config-${process.pid}.json`);
+  const c = JSON.parse(fs.readFileSync(path.join(repo, 'tracegate.config.json'), 'utf8')); c.lanes.api.keyedExtract = `node ${ex}`;
+  fs.writeFileSync(cfgPath, JSON.stringify(c));
+  const useExtractor = (on) => { if (on) process.env.TRACEGATE_CONFIG = cfgPath; else delete process.env.TRACEGATE_CONFIG; tg.resetContext(); };
+  const only = (raw) => { fs.rmSync(path.join(ledger, 'fp', 'api'), { recursive: true, force: true }); recordAt(execAt(fs.readFileSync(path.join(repo, SRC), 'utf8')), { raw }); };
+  tbl({}); commit('a table written as code');
+  useExtractor(true);
+  // The table is ALSO a loaded module here: the keyed rule must come first.
+  only({ loaded: [...LOADED, TBL], keyReads: { [TBL]: ['hello'] } });
+  tbl({ bye: 'Goodbye' }); commit('an unread key in a code table');
+  check('keyed (code table): an unread key reuses the verdict, even though the table is a loaded module', decideApi().run === false, JSON.stringify(decideApi()));
+  tbl({ hello: 'Hi', bye: 'Goodbye' }); commit('a read key in a code table');
+  check('keyed (code table): a key it read runs it, through the lane\'s extractor', /read key hello in packages\/api\/src\/i18n\.ts/.test(decideApi().reason ?? ''), JSON.stringify(decideApi()));
+  tbl({}); commit('table back');
+  w(TBL, fs.readFileSync(path.join(repo, TBL), 'utf8') + "globalThis.registered = true;\n"); commit('code, not data, in the table module');
+  check('keyed (code table): an edit to its CODE falls back to the module rule', /top-level change in packages\/api\/src\/i18n\.ts/.test(decideApi().reason ?? ''), JSON.stringify(decideApi()));
+  tbl({}); commit('table back, without the code');
+  only({ keyReads: { [TBL]: ['*'] } });
+  tbl({ bye: 'Later' }); commit('any edit, for a whole-table read');
+  check('keyed: the key * is a whole-table read: any edit runs it', /read key \* in/.test(decideApi().reason ?? ''), JSON.stringify(decideApi()));
+  tbl({}); commit('table back again');
+  only({ keyReads: { [TBL]: ['hello'] } });
+  tbl({ bye: 'BROKEN' }); commit('a table the extractor cannot read');
+  check('keyed: an extractor that fails counts as a change', /read key \* in/.test(decideApi().reason ?? ''), JSON.stringify(decideApi()));
+  tbl({}); commit('table back once more');
+  useExtractor(false);
+  only({ keyReads: { [TBL]: ['hello'] } });
+  tbl({ bye: 'See you' }); commit('no extractor configured');
+  check('keyed: with no extractor, a reported code table is a whole-file read input', /^read input packages\/api\/src\/i18n\.ts/.test(decideApi().reason ?? ''), JSON.stringify(decideApi()));
+  fs.rmSync(ex, { force: true }); fs.rmSync(cfgPath, { force: true });
+}
+
+// ── the recorder writes the keys a plugin reported into the raw footprint ───
+{
+  const { recordKeyRead, takeFootprint } = await import('../src/recorder.mjs');
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'tracegate-keys-'));
+  fs.mkdirSync(path.join(out, 'raw'));
+  const saved = globalThis.__tracegate;
+  const st = { session: { post: async () => ({ result: [] }) }, repoRoot: repo, srcPrefix: 'packages/api/src/', modules: new Map(), reads: new Set(), keyReads: new Map(), pkgReads: new Set(), pkgsKnown: true, outDir: out, write: fs.writeFileSync };
+  globalThis.__tracegate = st;
+  try {
+    recordKeyRead(path.join(repo, 'data/i18n.json'), 'greet.hello');
+    recordKeyRead('./data/i18n.json', 'nested.a');
+    recordKeyRead('data/i18n.json', 'greet.hello');
+    recordKeyRead('/elsewhere/x.json', 'k');
+    recordKeyRead('../outside.json', 'k');
+    await takeFootprint(st, path.join(repo, TEST));
+  } finally { globalThis.__tracegate = saved; }
+  const raw = JSON.parse(fs.readFileSync(path.join(out, 'raw', fs.readdirSync(path.join(out, 'raw'))[0]), 'utf8'));
+  check('recordKeyRead: keys land in the raw footprint per repo path, deduplicated; paths outside the repo are dropped', JSON.stringify(raw.keyReads) === JSON.stringify({ 'data/i18n.json': ['greet.hello', 'nested.a'] }), JSON.stringify(raw.keyReads));
+  fs.rmSync(out, { recursive: true, force: true });
+}
+
+// ── the pre-select hook adds files, never removes; a failure runs the lane ──
+{
+  recordAt(execAt(fs.readFileSync(path.join(repo, SRC), 'utf8')));
+  // The hook's config lives OUTSIDE the repo (TRACEGATE_CONFIG): editing the repo's own
+  // tracegate.config.json is a global input change, and would run every file anyway.
+  const cfg0 = fs.readFileSync(path.join(repo, 'tracegate.config.json'), 'utf8');
+  const cfgPath = path.join(os.tmpdir(), `tg-hook-config-${process.pid}.json`);
+  const withHook = (cmd) => { const c = JSON.parse(cfg0); c.lanes.api.preSelect = cmd; fs.writeFileSync(cfgPath, JSON.stringify(c)); process.env.TRACEGATE_CONFIG = cfgPath; tg.resetContext(); };
+  const sel = () => { const r = tmpRun(); const o = tg.select({ lane: 'api', run: r, mode: 'enforce', audit: '0' }); const p = JSON.parse(fs.readFileSync(path.join(r, 'predict.json'), 'utf8')); fs.rmSync(r, { recursive: true, force: true }); return { ...o, p }; };
+  const base0 = sel();
+  check('hook: without one, the recorded test is reused', !base0.selected.includes(TEST), JSON.stringify(base0.selected));
+  const seen = path.join(os.tmpdir(), `tg-hook-${process.pid}.json`);
+  withHook(`node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{require("fs").writeFileSync(${JSON.stringify(seen)},s);console.log(${JSON.stringify(TEST)})})'`);
+  const h1 = sel(); const input = JSON.parse(fs.readFileSync(seen, 'utf8'));
+  check('hook: a file it names runs, marked as the hook\'s', h1.selected.includes(TEST) && h1.p.decisions[TEST].reason === 'pre-select hook' && input.reused.includes(TEST) && input.lane === 'api', JSON.stringify({ sel: h1.selected, d: h1.p.decisions[TEST] }));
+  withHook('true');
+  const h2 = sel();
+  check('hook: naming nothing removes nothing', h2.selected.join() === base0.selected.join());
+  withHook('exit 3');
+  const h3 = sel();
+  check('hook: a hook that fails runs the whole lane', h3.selected.length === h3.files && /pre-select hook failed: exit 3/.test(h3.p.decisions[TEST].reason), JSON.stringify(h3.p.decisions[TEST]));
+  withHook('echo packages/api/src/a.ts');
+  const h4 = sel();
+  check('hook: naming a file that is not a test of the lane is a failure, not a selection', h4.selected.length === h4.files && /not test files of the lane/.test(h4.p.decisions[TEST].reason), JSON.stringify(h4.p.decisions[TEST]));
+  delete process.env.TRACEGATE_CONFIG; tg.resetContext(); fs.rmSync(cfgPath, { force: true }); fs.rmSync(seen, { force: true });
+}
+
 // ── sync: two ledgers become their union; each keeps its own log name ────────
 {
   const peer = fs.mkdtempSync(path.join(os.tmpdir(), 'tracegate-other-'));
@@ -421,7 +539,32 @@ fs.rmSync(fullLog);
   tg.sync({ remote: peer });
   check('sync pulls the other machine\'s blobs and log', fs.existsSync(path.join(ledger, 'blobs', 'feedface.json.gz')) && fs.existsSync(path.join(ledger, 'shadow-othermac.tsv')));
   check('sync pushes ours to it', fs.readdirSync(path.join(peer, 'blobs')).length > 1 && fs.existsSync(path.join(peer, 'shadow-selftest.tsv')));
+  // The evidence added after sync was first written travels too: an escalation on the
+  // other machine must suspend the lane here, and a person's approved skip must hold here.
+  fs.writeFileSync(path.join(peer, 'escalations-othermac.tsv'), 'at\tlane\tfile\thead\tverdict\n');
+  fs.writeFileSync(path.join(peer, 'silence-allow-othermac.tsv'), 'at\tlane\n');
+  fs.writeFileSync(path.join(peer, 'red-opinions-othermac.jsonl'), '{}\n');
+  fs.mkdirSync(path.join(peer, 'red'), { recursive: true }); fs.writeFileSync(path.join(peer, 'red', 'api-0123456789ab-x.json'), '{}');
+  fs.writeFileSync(path.join(peer, 'trainq-othermac.tsv'), 'at\tpr\n');
+  fs.writeFileSync(path.join(ledger, 'escalations-selftest.tsv'), 'at\tlane\tfile\thead\tverdict\n');
+  tg.sync({ remote: peer });
+  check('sync carries escalations, approved skips, opinions and red packets both ways',
+    ['escalations-othermac.tsv', 'silence-allow-othermac.tsv', 'red-opinions-othermac.jsonl', 'red/api-0123456789ab-x.json'].every((f) => fs.existsSync(path.join(ledger, f)))
+    && fs.existsSync(path.join(peer, 'escalations-selftest.tsv')));
+  check('sync leaves the other machine\'s train queue there: it is not ours to run', !fs.existsSync(path.join(ledger, 'trainq-othermac.tsv')));
   fs.rmSync(peer, { recursive: true, force: true });
+}
+
+// ── every log the code writes is either shared or deliberately local ────────
+{
+  const { SHARED_LOGS, LOCAL_LOGS } = await import('../src/sync.mjs');
+  const PKG = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+  const src = fs.readdirSync(path.join(PKG, 'src')).filter((f) => f.endsWith('.mjs')).map((f) => fs.readFileSync(path.join(PKG, 'src', f), 'utf8')).join('\n');
+  const written = new Set([...src.matchAll(/appendTsv\('([a-z-]+-)'/g), ...src.matchAll(/`([a-z-]+-)\$\{ctx\(\)\.host\}\.jsonl`/g)].map((m) => m[1]));
+  const known = new Set([...SHARED_LOGS, ...LOCAL_LOGS]);
+  const missing = [...written].filter((p) => !known.has(p));
+  const both = SHARED_LOGS.filter((p) => LOCAL_LOGS.includes(p));
+  check('sync: every log the code writes is in SHARED_LOGS or LOCAL_LOGS, and none is in both', written.size >= 15 && !missing.length && !both.length, JSON.stringify({ missing, both, written: written.size }));
 }
 
 fs.rmSync(repo, { recursive: true, force: true });

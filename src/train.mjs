@@ -30,6 +30,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { claim as busClaim, release as busRelease, warnings as busWarnings } from './bus.mjs';
 import { trainAdvice, trainOutcome } from './conductor.mjs';
 import { ctx, git, lane } from './config.mjs';
 import { appendTsv, ledgerDir, readTsv } from './ledger.mjs';
@@ -147,10 +148,16 @@ export function run(o = {}) {
   const say = o.quiet ? () => {} : (m) => console.log(`tracegate train: ${m}`);
   const unlock = lock();
   const out = { target, landed: [], rejected: [], gates: 0, invalidated: null, advice: null };
+  let lease = null; let tip = null;
   try {
     const q = queue(target);
     if (!q.length) { say(`nothing queued for ${target}.`); return out; }
-    let tip = git('rev-parse', '--verify', `refs/heads/${target}^{commit}`).trim();
+    tip = git('rev-parse', '--verify', `refs/heads/${target}^{commit}`).trim();
+    // The release bus (src/bus.mjs), if one is configured: say what other machines are
+    // running, and let them see this train. Advisory both ways; it never stops the train.
+    for (const w of busWarnings()) say(w);
+    const l = busClaim({ kind: 'train', target, lane: o.lane, prs: q.map((p) => p.pr) });
+    if (l.ok) lease = l.id;
     // 1. advice: which PRs go alone. Advice only; an error here just means one batch.
     let alone = [];
     try {
@@ -196,7 +203,13 @@ export function run(o = {}) {
     }
     say(`${out.landed.length} landed, ${out.rejected.length} rejected, ${out.gates} gate(s)${out.invalidated ? `, stopped: ${out.invalidated}` : ''}.`);
     return out;
-  } finally { unlock(); }
+  } finally {
+    if (lease) {
+      let tree; try { tree = git('rev-parse', `${tip}^{tree}`).trim(); } catch { /* the result still goes out */ }
+      busRelease(lease, { result: out.invalidated ? `stopped: ${out.invalidated}` : `${out.landed.length} landed, ${out.rejected.length} rejected`, tree, landed: out.landed, rejected: out.rejected.map((r) => r.pr) });
+    }
+    unlock();
+  }
 }
 
 export function status(o = {}) {
