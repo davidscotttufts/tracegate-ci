@@ -42,6 +42,10 @@ const USAGE = `usage: tracegate <command> [options]
                                        local merge train: each batch is gated as its exact
                                        merge commit, red batches are bisected, green ones land
                                        by compare-and-swap; pushing is opt-in
+  daemon  tick [--dry-run] [--lane l] | status [--json] | install [--every 20] [--print] | uninstall
+                                       work for an idle machine: the nightly full lane, and
+                                       pre-gating PRs queued for the train, each in a
+                                       throwaway worktree under a preemptible broker lease
   silence check [--lane l] [--base ref] [--json] | allow --file <f> [--kind k] --by <name>
                                        tests the change skipped, focused or deleted; allow is
                                        a person's decision (the Claude Code hook blocks agents)
@@ -149,6 +153,7 @@ try {
   else if (cmd === 'attest') process.exitCode = (await import('./attest.mjs')).attestCli(o);
   else if (cmd === 'verify') { const c = process.argv[3] && !process.argv[3].startsWith('--') ? process.argv[3] : undefined; process.exitCode = (await import('./attest.mjs')).verifyCli({ ...o, commit: c }); }
   else if (cmd === 'train') process.exitCode = (await import('./train.mjs')).train(process.argv[3], o);
+  else if (cmd === 'daemon') process.exitCode = (await import('./daemon.mjs')).daemon(process.argv[3], o);
   else if (cmd === 'conductor') (await import('./conductor.mjs')).conductor(process.argv[3], o);
   else if (cmd === 'run') process.exitCode = runLane(o, rest);
   else if (cmd === 'lease') process.exitCode = await (await import('./broker/client.mjs')).lease(o, rest);

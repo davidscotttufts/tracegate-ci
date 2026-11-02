@@ -209,6 +209,7 @@ A **lane** is one Vitest project. `tracegate.config.json` at the repository root
 | `ingestBudgetSeconds` | `300` | Ingest stops recording after this long (`TRACEGATE_INGEST_BUDGET_S`). |
 | `ledger` | `<git common dir>/tracegate` | Ledger directory, relative to the root (`TRACEGATE_LEDGER`). |
 | `sync` | — | Default `--remote` for `tracegate sync`: `[user@]host:/abs/ledger`, or `gs://bucket/prefix`. |
+| `daemon` | — | `tracegate daemon` settings: `window` (local hours, default `"1-6"`), `target` (`main`), `pregate` (`true`), `tokens` (`2`), `every` (minutes, `20`), `timeoutMin` (`120`), `gate` (the command; default `tracegate run`). |
 | `bus` | — | The release bus: `gs://bucket/prefix`, or a directory (`TRACEGATE_BUS`, `off` to disable). See [Two machines](#two-machines-the-release-bus). |
 
 Global inputs that are always included: in each lane dir `package.json`, lockfiles,
@@ -436,6 +437,35 @@ tier**.
 - A timeout (10 s) or invalid output leaves FIFO order.
 
 The advisor can never grant, preempt, add or remove a job.
+
+## Daemon: work for an idle machine
+
+`tracegate daemon tick` is one pass of background work, meant to run every 20 minutes:
+
+- **The full lane, at night.** When a lane's last complete full run is older than
+  `fullRunMaxHours`, and the local hour is inside `daemon.window` (default 1–6), it runs
+  the whole lane at the target branch's tip. A green run records the full run, so the
+  daily backstop does not land on somebody's gate during the day.
+- **Pre-gating the train queue.** Each PR queued with `tracegate train add` is run at its
+  pinned commit, once. When the train later gates the merge, those verdicts are waiting,
+  and only what the merge itself changed runs.
+
+Each piece runs in a throwaway worktree, never in your checkout, under a broker lease of
+class `daemon`. That class is preemptible: a gate, train or deploy takes the machine back
+at once. The piece is logged `yielded`, the tick stops, and a later tick tries again. A
+red or failed piece is not retried at the same commit. The worktree borrows the
+checkout's `node_modules`, so a piece whose lockfile differs from the installed one is
+skipped rather than run against the wrong packages.
+
+```sh
+npx tracegate daemon status            # installed?, what the next tick would do, recent pieces
+npx tracegate daemon tick --dry-run    # the plan, without running it
+npx tracegate daemon install           # a launchd agent (macOS) or systemd user timer (Linux)
+npx tracegate daemon install --print   # show the files instead of writing them
+npx tracegate daemon uninstall
+```
+
+The log is `daemon-<host>.tsv` in the ledger; it stays on its machine (`sync` leaves it).
 
 ## Two machines: the release bus
 

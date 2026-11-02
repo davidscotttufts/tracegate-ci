@@ -637,7 +637,7 @@ flags used were checked against the installed CLI (576.0.0).
 
 **Shipped as planned, plus:** `tracegate bus note`, and the `bus_status` MCP read tool.
 
-### Phase 7 — Extension points, then the host project adopts the package (v0.11)
+### Phase 7 — Extension points, then the host project adopts the package (package side done 2026-11-02, v0.10.0)
 
 **Why.** The host project still runs its own predictor (about 1,200 lines) beside
 vendored copies of this package's broker and Red Reader. The two have already drifted
@@ -645,7 +645,9 @@ vendored copies of this package's broker and Red Reader. The two have already dr
 config. It keeps its own predictor only for features this package cannot express (the
 host's ADR 0980 P4):
 - **A higher audit rate until a lane would have met the full bar** (20% instead of 5%),
-  for a lane let in early on a shorter bar.
+  for a lane let in early on a shorter bar. *Correction (2026-11-02): this already
+  existed, as `entryBar.earlyAudit` on a lane, with a test and a witness. Listing it as
+  missing came from reading the host's ADR, not this code.*
 - **A pre-select hook:** a module the lane names that may add files to a selection (the
   host's date-bomb sweep coupling). It can only add, never remove.
 - **Keyed inputs:** a recorder plugin can report the keys a test read from a data file
@@ -658,6 +660,18 @@ host's ADR 0980 P4):
 **Then** the host project decides, in its own ADR, whether to replace its predictor
 with this package. That is its decision and its gate; this phase only removes the
 reasons it could not.
+
+**Shipped:** `recordKeyRead` (keyed inputs, JSON compared by key between the footprint's
+commit and the tree under test; an imported JSON keeps the whole-file rule),
+`lanes.<l>.preSelect` (adds only; a failing hook runs the lane whole), and
+`tracegate daemon` (`tick`, `status`, `install` for launchd and systemd). Witnesses:
+`keyed-compares-values`, `keyed-imported-is-whole`, `hook-failure-runs-all`,
+`hook-lane-files-only`, `daemon-in-a-worktree`, `daemon-skips-other-lockfile`,
+`daemon-retries-yielded`, `daemon-window-wraps`.
+
+**Not ported:** the host daemon's pre-gating of every open PR head through GitHub. Here
+it pre-gates what is queued for the train, which needs no forge API; a host that wants
+open PRs can `train add` them.
 
 ### v1.0 criteria (status 2026-11-02)
 

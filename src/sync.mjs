@@ -17,8 +17,9 @@ import { ledgerDir } from './ledger.mjs';
 // an escalation on one machine then never suspended the lane on the other.
 export const SHARED_LOGS = ['shadow-', 'misses-', 'triage-', 'reasons-', 'full-', 'escalations-', 'red-', 'red-opinions-',
   'silenced-', 'silence-allow-', 'green-', 'conductor-', 'train-advice-', 'train-outcome-', 'deps-', 'deps-packets-', 'deps-opinions-'];
-// This machine's own work list: another machine's train queue is not ours to run.
-export const LOCAL_LOGS = ['trainq-'];
+// This machine's own work: another machine's train queue is not ours to run, and its
+// daemon's log says what that machine did, not what this one still has to.
+export const LOCAL_LOGS = ['trainq-', 'daemon-'];
 const SHARED_DIRS = ['fp', 'blobs', 'red', 'deps'];
 const EXT = ['.tsv', '.jsonl'];
 
