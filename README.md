@@ -207,7 +207,8 @@ A **lane** is one Vitest project. `tracegate.config.json` at the repository root
 | `keepPerTest` | `6` | Footprints kept per test file. |
 | `ingestBudgetSeconds` | `300` | Ingest stops recording after this long (`TRACEGATE_INGEST_BUDGET_S`). |
 | `ledger` | `<git common dir>/tracegate` | Ledger directory, relative to the root (`TRACEGATE_LEDGER`). |
-| `sync` | — | Default `--remote` for `tracegate sync`. |
+| `sync` | — | Default `--remote` for `tracegate sync`: `[user@]host:/abs/ledger`, or `gs://bucket/prefix`. |
+| `bus` | — | The release bus: `gs://bucket/prefix`, or a directory (`TRACEGATE_BUS`, `off` to disable). See [Two machines](#two-machines-the-release-bus). |
 
 Global inputs that are always included: in each lane dir `package.json`, lockfiles,
 `vitest.config.*`, `vitest.workspace.*`, `vitest.setup.*`, `vite.config.*`,
@@ -259,7 +260,8 @@ npx tracegate full-done --lane api                           # record a complete
 npx tracegate sync --remote user@host:/abs/path/.git/tracegate
 ```
 
-- **sync** exchanges the ledger with another machine over rsync. Footprints, blobs and red
+- **sync** exchanges the ledger with another machine, over rsync or through a `gs://`
+  prefix (no SSH between the machines). Footprints, blobs and red
   and dependency packets are merged; every evidence log goes both ways, each machine
   sending only its own (`<log>-<host>.tsv`). The train queue (`trainq-`) stays on its
   machine, because another machine's queued PRs are not this one's to land.
@@ -409,8 +411,8 @@ Details and the per-platform signals: [docs/design/broker.md §9](docs/design/br
 
 `tracegate mcp` is a Model Context Protocol server over stdio.
 
-- **Read-only tools:** `queue_status`, `explain_job`, `history`, `machine_load`, `lane_mode`, `red_runs` and `read_red`.
-- **With `--allow-write`:** `cancel_queued` (queued jobs only) and `annotate_red` (an escalate-only opinion).
+- **Read-only tools:** `queue_status`, `explain_job`, `history`, `machine_load`, `lane_mode`, `red_runs`, `read_red`, `deps_runs`, `read_deps`, `savings`, `report_card`, `train_status` and `bus_status` (what other machines are running).
+- **With `--allow-write`:** `cancel_queued` (queued jobs only), `annotate_red` and `annotate_deps` (escalate-only opinions), and `train_add`.
 
 Register it with Claude Code:
 
@@ -433,6 +435,42 @@ tier**.
 - A timeout (10 s) or invalid output leaves FIFO order.
 
 The advisor can never grant, preempt, add or remove a job.
+
+## Two machines: the release bus
+
+The broker coordinates one machine. When two machines work on one repository (two
+laptops, or a laptop and a build box), each can start a train or a deploy while the other's
+is running, and neither knows. The bus is a small shared record both read:
+
+```json
+{ "bus": "gs://my-team-release-bus/tracegate" }
+```
+
+- **Leases.** `tracegate train run` holds a `train` lease while it runs and publishes
+  start and end events: the PRs, the result, and the tree that landed. Your own scripts
+  can do the same: `tracegate bus claim --kind deploy` prints a lease id, and
+  `tracegate bus release <id> --result VERIFIED` ends it.
+- **Warnings, never waits.** Before a train gates, it prints a `WARN bus:` line for each
+  live lease another machine holds, and then carries on. Nothing on the bus ever waits
+  for, refuses or freezes another machine's work: the merge train's own
+  compare-and-swap already refuses to land on a target that moved.
+- **Stale is not busy.** A lease runs for about twice its kind's typical length. After
+  that it reads `STALE` and is never a warning, so a crashed train or a closed laptop
+  lid leaves no lock behind. A lease a day past its expiry is dropped.
+- **No lock, no failure.** The record is written by compare-and-swap on its generation
+  (`--if-generation-match` on GCS), so racing writers all land. Every call has one
+  deadline (`TRACEGATE_BUS_TIMEOUT_MS`, default 10 s). No gcloud, no login, offline or a
+  hung call all print `bus: unavailable (…)`, and the command keeps its own exit code.
+- **Notes.** `tracegate bus note --text "…" [--to <session|host|*>]` leaves a message for
+  sessions on the other machine. Anything shaped like a token or key is refused.
+- **See it.** `tracegate bus status` shows both machines' leases, live and stale, and
+  the latest events. Agents read the same through the `bus_status` MCP tool.
+- **Share the ledger through it.** `tracegate sync --remote gs://my-team-release-bus/ledger`
+  does what the rsync form does, with no SSH between the machines.
+
+GCS is reached through the `gcloud` CLI and its login. For a shared disk, or for tests,
+give a directory instead: there each write creates the next generation with `link(2)`,
+which only one writer can win.
 
 ## Red Reader
 

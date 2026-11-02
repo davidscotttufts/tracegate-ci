@@ -38,6 +38,10 @@ test runs on this machine so they do not starve each other.
   person or the gate run `tracegate train run`. Don't merge into the target yourself.
 - `npx tracegate train status` (or `train_status`) shows what is queued, landed and
   rejected, and why.
+- If the repository has a release bus (`"bus"` in `tracegate.config.json`), read
+  `npx tracegate bus status` (or `bus_status`) before a train, deploy or release. A live
+  lease from another machine means it is busy: tell the person, and don't start a deploy
+  on top of it. A `STALE` lease is not busy.
 
 ## What you must not do
 

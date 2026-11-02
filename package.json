@@ -54,7 +54,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node test/selftest.mjs && node test/broker.mjs && node test/adaptive.mjs && node test/red.mjs && node test/deps.mjs && node test/conductor.mjs && node test/jobserver.mjs && node test/onboarding.mjs && node test/evidence.mjs && node test/train.mjs && node test/silence.mjs && node test/attest.mjs && node test/jest.mjs",
+    "test": "node test/selftest.mjs && node test/broker.mjs && node test/adaptive.mjs && node test/red.mjs && node test/deps.mjs && node test/conductor.mjs && node test/jobserver.mjs && node test/onboarding.mjs && node test/evidence.mjs && node test/train.mjs && node test/bus.mjs && node test/silence.mjs && node test/attest.mjs && node test/jest.mjs",
     "test:sabotage": "node test/sabotage.mjs",
     "test:e2e": "bash examples/e2e.sh",
     "test:e2e-jest": "SAMPLE=sample-repo-jest STRICT_SEAM=1 bash examples/e2e.sh",
@@ -71,7 +71,8 @@
     "test:silence": "node test/silence.mjs",
     "test:attest": "node test/attest.mjs",
     "test:jest": "node test/jest.mjs",
-    "test:compare": "bash examples/compare-vitest.sh"
+    "test:compare": "bash examples/compare-vitest.sh",
+    "test:bus": "node test/bus.mjs"
   },
   "peerDependencies": {
     "typescript": ">=5.0.0 <7",

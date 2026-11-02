@@ -59,6 +59,11 @@ const USAGE = `usage: tracegate <command> [options]
                                        miss rate with a 95% interval, hole exposure, audit
                                        cost, Red Reader and Conductor scores, from the logs
   sync    [--remote <[user@]host:/abs/ledger>]
+  bus     status [--json] | claim --kind gate|train|deploy|release [--lane l] [--pr a,b] [--lease-min m]
+          | release <id> [--result r] | note --text t [--to session|host|*] | warn
+                                       the release bus: what OTHER machines are gating or
+                                       deploying, from a shared store ("bus": "gs://…" or a
+                                       directory). Advisory: it warns, never waits or refuses
 
 Broker (one queue for the machine's CI work; see docs/design/broker.md):
   lease   [--class c] [--tokens n] [--min-tokens m] [--mem-per-token MB] [--exclusive]
@@ -134,6 +139,7 @@ try {
   else if (cmd === 'savings') printSavings(o);
   else if (cmd === 'report-card') (await import('./evidence.mjs')).printCard(o);
   else if (cmd === 'sync') sync(o);
+  else if (cmd === 'bus') { const id = process.argv[4] && !process.argv[4].startsWith('--') ? process.argv[4] : undefined; process.exitCode = (await import('./bus.mjs')).bus(process.argv[3], { ...o, _id: id }); }
   else if (cmd === 'triage') triage(o);
   else if (cmd === 'full-done') fullDone(o);
   else if (cmd === 'replay') replay(o);

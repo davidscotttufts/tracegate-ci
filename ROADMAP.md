@@ -589,7 +589,7 @@ what the plugin runs, reads, writes and sends, and `displayName`, `documentation
 **Left to the owner:** submit the plugin to the directory, and triage the 52 untriaged
 backend misses in the host project, then regenerate the card.
 
-### Phase 5 — Two machines: every log syncs (v0.9.3)
+### Phase 5 — Two machines: every log syncs (done 2026-11-02, v0.10.0)
 
 **Why.** The host project is worked on from two Macs that share one ledger through
 `tracegate sync`. `sync` still carried only the five logs it was written with. Everything
@@ -603,7 +603,7 @@ machine's work list, is local), the packet directories are merged like footprint
 the self-test fails on any log the code writes that is in neither list. Witnesses:
 `sync-shares-escalations`, `sync-keeps-trainq-local`, `sync-carries-packets`.
 
-### Phase 6 — The release bus: see the other machine (v0.10)
+### Phase 6 — The release bus: see the other machine (done 2026-11-02, v0.10.0)
 
 **Why.** The broker sees one machine. On 2026-10-12 the host project's second Mac merged
 five PRs and deployed while a merge-train gate ran on the first; the gate went green and
@@ -629,9 +629,13 @@ across machines.
   per host, so a union through the bucket is as safe as rsync, and needs no SSH between
   the machines).
 
-**Witnesses:** a stale lease never warns as live; an unreachable bus never changes the
-caller's exit code; two writers racing on one record both land (the loser re-reads and
-re-applies); a train's result event names its tree.
+**Witnesses:** `bus-stale-never-warns`, `bus-cas-retries` (eight writers racing on one
+record all land), `bus-never-throws`, `bus-is-advisory` (a train warns and lands anyway),
+`bus-refuses-secrets`, `bus-sync-no-clobber`. `test/bus.mjs` runs both stores, the
+GCS one through a fake `gcloud` that enforces generations as GCS does; the `gcloud`
+flags used were checked against the installed CLI (576.0.0).
+
+**Shipped as planned, plus:** `tracegate bus note`, and the `bus_status` MCP read tool.
 
 ### Phase 7 — Extension points, then the host project adopts the package (v0.11)
 
