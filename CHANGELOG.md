@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.1 (2026-11-02)
 
 Fixed:
 - A test that runs `git` on the repository (to read commit messages, say) could reuse its
@@ -9,6 +9,11 @@ Fixed:
   after a commit, with nothing in its footprint changed. The recorder now notes any `git`
   run in the repository, through any `child_process` call, and such a test runs again
   after every new commit. `git` in a test's own temporary repository doesn't count.
+
+Added:
+- `PRIVACY.md`, linked from `plugin.json` (`privacyPolicyUrl`) and shipped in the package:
+  what Tracegate reads, writes and sends (nothing by default).
+- The published report card now has every backend miss in the host project triaged.
 
 ## 0.10.0 (2026-11-02)
 

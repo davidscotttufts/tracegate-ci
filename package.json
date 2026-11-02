@@ -1,6 +1,6 @@
 {
   "name": "tracegate-ci",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "description": "Test-impact selection for Vitest and Jest from observed per-file footprints, and a local broker that gives every gate, daemon, measurement and AI agent on a machine one fair queue.",
   "license": "Apache-2.0",
   "author": "David Tufts",
