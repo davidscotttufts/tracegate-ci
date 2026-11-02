@@ -10,6 +10,7 @@
   "icon": "./assets/icon.png",
   "documentationUrl": "https://github.com/davidscotttufts/tracegate-ci#readme",
   "supportUrl": "https://github.com/davidscotttufts/tracegate-ci/issues",
+  "privacyPolicyUrl": "https://github.com/davidscotttufts/tracegate-ci/blob/main/PRIVACY.md",
   "keywords": ["vitest", "test-impact", "local-ci", "mcp", "merge-queue", "flaky-tests"],
   "mcpServers": {
     "tracegate": {
