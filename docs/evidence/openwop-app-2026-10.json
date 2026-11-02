@@ -1,20 +1,20 @@
 {
-  "generatedAt": "2026-11-01T03:25:14.335Z",
+  "generatedAt": "2026-11-02T12:39:42.899Z",
   "host": "MacBook-Pro-48",
   "lanes": [
     {
       "lane": "backend",
       "observations": {
-        "runs": 358,
-        "shadow": 358,
+        "runs": 369,
+        "shadow": 369,
         "enforce": 0,
         "first": "2026-10-13T07:00:58.929Z",
-        "last": "2026-11-01T01:33:35.390Z",
-        "meanSelected": 0.41,
-        "meanTimePct": 53.204
+        "last": "2026-11-02T11:23:53.259Z",
+        "meanSelected": 0.414,
+        "meanTimePct": 53.758
       },
       "misses": {
-        "checked": 577830,
+        "checked": 592275,
         "missed": 117,
         "rate": 0.0002,
         "wilson95": [
@@ -22,18 +22,24 @@
           0.0002
         ],
         "runsWithMiss": 17,
-        "perRun": 0.0475,
+        "perRun": 0.0461,
         "perRunWilson95": [
-          0.0299,
-          0.0747
+          0.029,
+          0.0725
         ]
       },
       "triage": {
-        "hole": 1,
-        "flake": 64,
-        "untriaged": 52
+        "hole": 2,
+        "flake": 115,
+        "untriaged": 0
       },
       "holes": [
+        {
+          "file": "[redacted]",
+          "head": "[redacted]",
+          "at": "2026-10-25T01:20:28.188Z",
+          "exposureHours": 0.5
+        },
         {
           "file": "[redacted]",
           "head": "[redacted]",
@@ -56,16 +62,16 @@
     {
       "lane": "frontend",
       "observations": {
-        "runs": 252,
-        "shadow": 221,
-        "enforce": 31,
+        "runs": 262,
+        "shadow": 222,
+        "enforce": 40,
         "first": "2026-10-13T07:03:04.748Z",
-        "last": "2026-11-01T01:39:00.953Z",
-        "meanSelected": 0.141,
-        "meanTimePct": 16.272
+        "last": "2026-11-02T10:01:25.085Z",
+        "meanSelected": 0.14,
+        "meanTimePct": 16.285
       },
       "misses": {
-        "checked": 204502,
+        "checked": 206088,
         "missed": 10,
         "rate": 0,
         "wilson95": [
@@ -73,10 +79,10 @@
           0.0001
         ],
         "runsWithMiss": 7,
-        "perRun": 0.0278,
+        "perRun": 0.0267,
         "perRunWilson95": [
-          0.0135,
-          0.0562
+          0.013,
+          0.0541
         ]
       },
       "triage": {
@@ -87,9 +93,9 @@
       "holes": [],
       "longestExposure": null,
       "auditCost": {
-        "audited": 1545,
-        "mustRun": 3614,
-        "ratio": 0.4275
+        "audited": 1989,
+        "mustRun": 5143,
+        "ratio": 0.3867
       }
     }
   ],
