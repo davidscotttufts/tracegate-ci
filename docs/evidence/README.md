@@ -8,7 +8,7 @@ hand.
 
 | Card | Project | Window | Runs |
 |---|---|---|---|
-| [openwop-app-2026-10](openwop-app-2026-10.md) ([JSON](openwop-app-2026-10.json)) | openwop-app (private), the project Tracegate was built in | 2026-10-13 to 2026-11-01 | 610 (579 shadow, 31 enforce) |
+| [openwop-app-2026-10](openwop-app-2026-10.md) ([JSON](openwop-app-2026-10.json)) | openwop-app (private), the project Tracegate was built in | 2026-10-13 to 2026-11-02 | 631 (591 shadow, 40 enforce) |
 
 ## Making one
 

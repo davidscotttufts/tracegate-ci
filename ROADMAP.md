@@ -14,7 +14,7 @@ bus. It runs in the private monorepo it came from, whose numbers are published i
 ## Before 1.0
 
 - [x] CLI and MCP tools documented.
-- [x] Miss rates from a real project published.
+- [x] Miss rates from a real project published, with every backend miss triaged.
 - [ ] At least two other repositories using it.
 
 ## Next
@@ -24,8 +24,11 @@ bus. It runs in the private monorepo it came from, whose numbers are published i
 2. **The host project moves onto the package.** It still runs its own copy of the
    predictor. Its ADR 1028 proposes switching lane by lane, after 20 gates where both
    predict side by side.
-3. **Triage the host's backlog.** 52 backend misses from its first day are untriaged,
-   which weakens the published card.
+3. **Tests that read git history.** Triaging the host's backlog (done 2026-11-02: 51 of
+   52 misses passed alone at their commit, three times each) found one real hole. A test
+   that reads commit subjects through `git log` failed after a new commit, and nothing in
+   its footprint had changed. The recorder should note when a test runs `git`, and treat
+   history as an input for that test, so a new commit re-runs it.
 
 ## Later
 
