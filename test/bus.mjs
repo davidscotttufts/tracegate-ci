@@ -59,6 +59,26 @@ const iso = (ms) => new Date(Date.now() + ms).toISOString();
   writeState([]);
 }
 
+// ── no lock: a writer that loses the race re-reads and re-applies ───────────
+// Deterministic: the store's first write fails because "another machine" wrote in
+// between our read and our write. A race between real processes (below) only proves
+// this when they happen to collide, which fast Linux runners rarely did.
+{
+  let state = { gen: 0, data: { version: 1, leases: [] } }; let writes = 0;
+  const store = {
+    read: () => ({ gen: state.gen, data: JSON.parse(JSON.stringify(state.data)) }),
+    write: (gen, data) => {
+      writes++;
+      if (writes === 1) { state = { gen: state.gen + 1, data: { version: 1, leases: [{ id: 'theirs', host: 'there', leaseUntil: iso(60_000) }] } }; return false; }
+      if (gen !== state.gen) return false;
+      state = { gen: gen + 1, data }; return true;
+    },
+  };
+  B.update({ store, deadline: Date.now() + 5000 }, (s) => ({ ...s, leases: [...s.leases, { id: 'ours', host: 'here', leaseUntil: iso(60_000) }] }));
+  const ids = state.data.leases.map((l) => l.id).sort().join();
+  check('a write that lost the race is re-read and re-applied: both leases land', ids === 'ours,theirs' && writes === 2, JSON.stringify({ ids, writes }));
+}
+
 // ── no lock: writers racing on one record all land ──────────────────────────
 const race = async (n, env) => {
   const kids = Array.from({ length: n }, (_, i) => new Promise((res) => {

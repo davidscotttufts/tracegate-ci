@@ -165,8 +165,9 @@ const clean = (data, now = Date.now()) => ({
   leases: (Array.isArray(data?.leases) ? data.leases : []).filter((l) => l && typeof l === 'object' && !(Date.parse(l.leaseUntil) + DROP_AFTER_MS < now)),
 });
 
-/** Compare-and-swap loop: re-read and re-apply until the write lands or time runs out. */
-function update(b, change) {
+/** Compare-and-swap loop: re-read and re-apply until the write lands or time runs out.
+ *  Exported for the tests, which drive it with a store that loses a race on purpose. */
+export function update(b, change) {
   for (;;) {
     if (Date.now() > b.deadline) throw new Error('timed out (the state kept changing)');
     const { gen, data } = b.store.read();

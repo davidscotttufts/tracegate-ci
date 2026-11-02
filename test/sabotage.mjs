@@ -439,7 +439,7 @@ const WITNESSES = [
     'an expired lease reads STALE and is never a warning', 'bus.mjs'],
   ['bus-cas-retries', 'src/bus.mjs',
     'if (b.store.write(gen, next)) return next;', 'b.store.write(gen, next); return next;',
-    'eight machines claiming at once', 'bus.mjs'],
+    'a write that lost the race is re-read and re-applied', 'bus.mjs'],
   ['bus-never-throws', 'src/bus.mjs',
     "try { return { ok: true, ...fn(b) }; } catch (e) { return { ok: false, why: e.message || String(e) }; }", 'return { ok: true, ...fn(b) };',
     'no gcloud: { ok: false } with the reason, never a throw', 'bus.mjs'],
