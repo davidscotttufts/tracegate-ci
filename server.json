@@ -4,12 +4,12 @@
   "title": "Tracegate CI",
   "description": "Local CI broker and test-impact ledger for coding agents: queue, lane modes and red-run packets.",
   "repository": { "url": "https://github.com/davidscotttufts/tracegate-ci", "source": "github" },
-  "version": "0.10.0",
+  "version": "0.10.1",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "tracegate-ci",
-      "version": "0.10.0",
+      "version": "0.10.1",
       "transport": { "type": "stdio" },
       "packageArguments": [{ "type": "positional", "value": "mcp" }]
     }
