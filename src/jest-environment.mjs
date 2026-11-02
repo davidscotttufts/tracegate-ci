@@ -26,7 +26,7 @@ export default class TracegateEnvironment extends NodeEnvironment {
     if (!process.env.TRACEGATE_RECORD) return;
     // Jest reuses compiled scripts across a worker's test files: call counts (recorder.mjs).
     this.tracegate = await recorderState({ ...laneTarget(), callCount: true });
-    this.tracegate.reads.clear(); this.tracegate.keyReads.clear();
+    this.tracegate.reads.clear(); this.tracegate.keyReads.clear(); if (this.tracegate.git) this.tracegate.git.used = false;
   }
   async teardown() {
     if (this.tracegate) await takeFootprint(this.tracegate, this.tracegateTestPath);

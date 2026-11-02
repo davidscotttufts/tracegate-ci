@@ -76,7 +76,8 @@ means no change to:
 - a function it executed, a constant it uses, or a module it loaded;
 - a file it read;
 - the test file itself;
-- a global input, such as `package.json`, a lockfile or the Vitest config.
+- a global input, such as `package.json`, a lockfile or the Vitest config;
+- the repository's history, for a test that runs `git` on it.
 
 Uncommitted edits count. Edits inside functions the test never ran don't.
 

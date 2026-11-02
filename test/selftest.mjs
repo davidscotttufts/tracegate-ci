@@ -486,6 +486,54 @@ fs.rmSync(fullLog);
   fs.rmSync(ex, { force: true }); fs.rmSync(cfgPath, { force: true });
 }
 
+// ── a test that runs git on this repository depends on its history ──────────
+{
+  const { runsGitHere } = await import('../src/recorder.mjs');
+  const R = repo;
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), 'tracegate-gitother-'));
+  const g = (kind, file, args, opts) => runsGitHere(kind, file, args, opts, R);
+  check('git: spawn/execFile of git in the repo (or a subdirectory) reads its history',
+    g('argv', 'git', ['log'], { cwd: R }) && g('argv', '/usr/bin/git', ['show'], { cwd: path.join(R, 'packages') }) && g('argv', 'git', { cwd: R }));
+  check('git: exec takes its options as the SECOND argument',
+    g('shell', 'git log --oneline', { cwd: R }) && !g('shell', 'git log', { cwd: other }));
+  check('git: git -C or GIT_DIR pointing into the repo counts, from anywhere',
+    g('argv', 'git', ['-C', R, 'log'], { cwd: other }) && g('argv', 'git', ['log'], { cwd: other, env: { GIT_DIR: path.join(R, '.git') } }));
+  check('git: git in a test\'s own temp repository is not this repository\'s history',
+    !g('argv', 'git', ['log'], { cwd: other }) && !g('argv', 'git', ['-C', other, 'log'], { cwd: R }));
+  check('git: other commands are not git', !g('argv', 'node', ['git'], { cwd: R }) && !g('shell', 'node digit.js', { cwd: R }) && !g('argv', 'gitk', [], { cwd: R }));
+
+  // The real recorder, in a child process with recording on: a test file that runs
+  // `git log` here (through an ESM named import) is marked; one that runs git only in
+  // its own temp repo is not.
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'tracegate-gitrec-'));
+  const PKG = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+  const script = `
+    const { recorderState, takeFootprint } = await import(${JSON.stringify(path.join(PKG, 'src', 'recorder.mjs'))});
+    const st = await recorderState({ repoRoot: ${JSON.stringify(R)}, srcPrefix: 'packages/api/src/' });
+    const { execFileSync } = await import('node:child_process');
+    st.reads.clear(); st.git.used = false;
+    execFileSync('git', ['log', '-1', '--format=%s'], { cwd: ${JSON.stringify(R)} });
+    await takeFootprint(st, ${JSON.stringify(path.join(R, 'packages/api/test/reads-history.test.ts'))});
+    st.reads.clear(); st.git.used = false;
+    execFileSync('git', ['init', '-q'], { cwd: ${JSON.stringify(other)} });
+    await takeFootprint(st, ${JSON.stringify(path.join(R, 'packages/api/test/own-repo.test.ts'))});
+  `;
+  execFileSync(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, TRACEGATE_RECORD: out }, stdio: ['ignore', 'ignore', 'inherit'] });
+  const raws = fs.readdirSync(path.join(out, 'raw')).map((f) => JSON.parse(fs.readFileSync(path.join(out, 'raw', f), 'utf8')));
+  const byTest = Object.fromEntries(raws.map((r) => [path.basename(r.testFile), r]));
+  check('git: the recorder marks the test file that ran git log here, and only that one',
+    byTest['reads-history.test.ts']?.git === true && byTest['own-repo.test.ts'] && !byTest['own-repo.test.ts'].git, JSON.stringify(Object.fromEntries(raws.map((r) => [path.basename(r.testFile), r.git ?? null]))));
+  fs.rmSync(out, { recursive: true, force: true }); fs.rmSync(other, { recursive: true, force: true });
+
+  // The predictor: reused at its own commit, run after any new commit.
+  fs.rmSync(path.join(ledger, 'fp', 'api'), { recursive: true, force: true });
+  recordAt(execAt(fs.readFileSync(path.join(repo, SRC), 'utf8')), { raw: { git: true } });
+  check('git: at the commit it was recorded on, the verdict is reused', decideApi().run === false, JSON.stringify(decideApi()));
+  w('data/unrelated-note.txt', 'a commit nothing in the footprint touches\n'); commit('an unrelated commit');
+  const d = decideApi();
+  check('git: after any new commit it runs, because history changed', d.run === true && /^runs git: history changed/.test(d.reason), JSON.stringify(d));
+}
+
 // ── the recorder writes the keys a plugin reported into the raw footprint ───
 {
   const { recordKeyRead, takeFootprint } = await import('../src/recorder.mjs');
