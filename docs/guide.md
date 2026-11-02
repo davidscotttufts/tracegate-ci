@@ -153,8 +153,9 @@ hold:
   module it loaded, a module that couldn't be mapped, or a path it read or listed.
 
 Changes are attributed per character to their owner: the innermost function, or the kind
-of top-level statement. Imports and types are ignored, a plain-data `const` is a constant,
-and anything else is top level. An anonymous callback is keyed by its callee and first
+of top-level statement. Type-only edits are ignored. Adding, removing or changing a value
+import counts as a change. A plain-data `const` is a constant, and anything else is top
+level. An anonymous callback is keyed by its callee and first
 string argument, so each route handler is its own key.
 
 **Uncommitted changes count.** If tracked files are edited, H is the working tree.
@@ -344,9 +345,10 @@ queue with everything else. It also blocks agents from running `triage` and
   gates the merge later, only what the merge changed has to run.
 
 Each piece runs in a throwaway worktree under a preemptible `daemon` lease. If a gate needs
-the machine, the piece stops, is logged `yielded`, and runs on a later tick. A red piece
-isn't retried at the same commit. A piece whose lockfile differs from the installed
-packages is skipped, because the worktree borrows your `node_modules`.
+the machine, the piece stops, is logged `yielded`, and runs on a later tick. A piece that
+ran, green or red, doesn't run again at the same commit: a pre-gated PR never does, and a
+full lane not within the same `fullRunMaxHours`. A piece whose lockfile differs from the
+installed packages is skipped, because the worktree borrows your `node_modules`.
 
 ```sh
 npx tracegate daemon status            # installed?, the next tick's plan, recent pieces

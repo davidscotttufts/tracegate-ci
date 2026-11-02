@@ -10,10 +10,11 @@ inputs didn't change can reuse its last green result. The rest run.
 It doesn't skip anything until that has been shown to be safe:
 
 - **Shadow first.** Every test still runs, and Tracegate logs what it would have skipped.
-- **Entry bar.** A lane starts skipping only after 20 runs over 14 days with no miss.
+- **Entry bar.** A lane starts skipping only after 20 runs over 14 days, with no untriaged
+  miss in the last 14 days.
 - **Random audits.** 5% of the skippable tests run anyway.
-- **A miss suspends it.** If a skipped test would have failed, the lane runs everything
-  again until it re-earns the bar.
+- **A miss suspends it.** If a test predicted safe to skip fails anyway, the lane runs
+  everything for 14 days, unless someone triages the miss as a flaky test.
 
 It can't turn a red into a green. A failing test's record is dropped, and no record older
 than 72 hours is reused.
