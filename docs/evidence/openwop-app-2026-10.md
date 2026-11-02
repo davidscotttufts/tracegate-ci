@@ -2,7 +2,7 @@
 
 Generated 2026-11-02T12:39:42.842Z on `MacBook-Pro-48` from the ledger's append-only logs.
 
-Source: openwop-app, a private repository, lanes `backend` and `frontend`. Test paths and commit prefixes are redacted; every number is as generated. On 2026-11-02 the backend's 52 untriaged misses were triaged by re-running each file alone, three times, at the commit where it missed: 51 passed every time (flake) and 1 failed every time (a hole: a test whose result depends on git history, which the recorder can't see).
+Source: openwop-app, a private repository, lanes `backend` and `frontend`. Test paths and commit prefixes are redacted; every number is as generated. On 2026-11-02 the backend's 52 untriaged misses were triaged by re-running each file alone, three times, at the commit where it missed: 51 passed every time (flake) and 1 failed every time (a hole: a test whose result depends on git history, which the recorder can't see). The frontend's last untriaged miss was re-run the same way and passed every time (flake).
 
 ## Lane `backend`
 
@@ -28,7 +28,7 @@ Source: openwop-app, a private repository, lanes `backend` and `frontend`. Test 
 | Reused verdicts checked | 206088 |
 | Misses | 10 — 0.00% per checked verdict (95% CI 0.00% – 0.01%) |
 | Runs with a miss | 7 of 262 — 2.67% (95% CI 1.30% – 5.41%) |
-| Triage of misses | 0 hole, 9 flake, 1 untriaged |
+| Triage of misses | 0 hole, 10 flake, 0 untriaged |
 | Longest hole exposure | — |
 | Audit cost | 1989 audited files over 5143 that had to run (38.67%) |
 

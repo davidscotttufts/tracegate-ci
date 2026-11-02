@@ -87,8 +87,8 @@
       },
       "triage": {
         "hole": 0,
-        "flake": 9,
-        "untriaged": 1
+        "flake": 10,
+        "untriaged": 0
       },
       "holes": [],
       "longestExposure": null,
