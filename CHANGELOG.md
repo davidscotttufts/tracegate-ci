@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.2 (2026-11-02): plugin directory readiness and the first report card
 
 - **The first published report card:** `docs/evidence/openwop-app-2026-10.md`, from the
   ledger of the project Tracegate was built in (610 runs over three weeks). One private test
@@ -13,6 +13,10 @@
   security scan; `plugin.json` gains `displayName`, `documentationUrl` and `supportUrl`.
 - **A plugin icon** (`assets/icon.svg`, rendered to `assets/icon.png`), named by `icon` in
   `plugin.json` for the plugin directory listing.
+- **A sabotage witness that depended on timing.** `red-unique-ids` compared two packets
+  written dozens of lines apart, so it only tested "same second" when the test ran fast;
+  on a slow macOS runner it passed with the rule broken (main CI, 2026-11-01). The check
+  now writes two packets under a frozen clock.
 
 ## 0.9.1 (2026-10-30): fixes from installing 0.9.0 as a new user
 

@@ -70,10 +70,20 @@ const triageFiles = () => { try { return fs.readdirSync(ledger).filter((f) => f.
 red.annotate({ ...good, verdict: 'flake-suspect', escalate: false, confidence: 0.9, reasons: 'a flake, says the model' });
 check('escalate-only: a flake-suspect opinion writes NO triage row', triageFiles().length === 0);
 check('escalate-only: nothing in the predictor imports the Red Reader', !fs.readFileSync(path.join(PKG, 'src', 'predictor.mjs'), 'utf8').includes('red.mjs'));
+// Two packets written at the SAME instant, under a frozen clock. Comparing p and q
+// instead only tested this when the test ran fast enough to keep them in one second:
+// on a slow CI runner they fell in different seconds and the witness passed unbroken.
+{
+  const RealDate = globalThis.Date;
+  const frozen = RealDate.parse('2026-11-01T12:00:00.000Z');
+  globalThis.Date = class extends RealDate { constructor(...a) { super(...(a.length ? a : [frozen])); } static now() { return frozen; } };
+  let r1, r2;
+  try { r1 = red.writePacket({ lane: 'default', run, base: C1 }); r2 = red.writePacket({ lane: 'default', run, base: C1 }); } finally { globalThis.Date = RealDate; }
+  check('packet ids are unique even for two packets in the same second from one process', r1.id !== r2.id && fs.existsSync(path.join(ledger, 'red', `${r1.id}.json`)) && fs.existsSync(path.join(ledger, 'red', `${r2.id}.json`)), `${r1.id} ${r2.id}`);
+}
 fs.writeFileSync(path.join(run, 'misses.txt'), '');
 const q = red.writePacket({ lane: 'default', run, base: C1 });
 red.annotate({ id: q.id, verdict: 'infra', escalate: false, confidence: 0.5, reasons: 'load' });
-check('packet ids are unique even for two packets in the same second from one process', q.id !== p.id && fs.existsSync(path.join(ledger, 'red', `${p.id}.json`)) && fs.existsSync(path.join(ledger, 'red', `${q.id}.json`)), `${p.id} ${q.id}`);
 check('list: newest first when nothing is escalated', red.listRed()[0].id === q.id);
 red.annotate({ ...good, reasons: 'escalating again with new evidence' });
 check('list: an escalated packet sorts above a newer one that is not', red.listRed()[0].id === p.id && red.listRed()[0].opinion.escalate === true);
