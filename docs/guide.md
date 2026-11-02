@@ -163,8 +163,13 @@ string argument, so each route handler is its own key.
 run on uncommitted changes records no footprints, no full run and no attestation
 evidence, because none of those could name a commit that was tested.
 
+**A test that runs `git` on the repository** (`git log`, `git show`, a check of commit
+messages) depends on its history, which no file read shows. The recorder notes when a test
+runs `git` in the repository, through any `child_process` call, and such a test runs again
+after every new commit. `git` run in a test's own temporary repository doesn't count.
+
 **What a footprint can't see:** environment variables, the clock (hence the 72-hour
-limit), the network, and other processes. The random audit and the daily full run are
+limit), the network, and what other processes read. The random audit and the daily full run are
 the backstops, and a miss from either suspends the lane.
 
 **If the runner moves the recorder's seam** (after a Vitest upgrade, say), modules come

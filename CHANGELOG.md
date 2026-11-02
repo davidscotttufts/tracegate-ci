@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+Fixed:
+- A test that runs `git` on the repository (to read commit messages, say) could reuse its
+  verdict after a new commit, because history is no file the test reads. Found triaging
+  the host project's misses: a check of ADR statuses against commit subjects went red
+  after a commit, with nothing in its footprint changed. The recorder now notes any `git`
+  run in the repository, through any `child_process` call, and such a test runs again
+  after every new commit. `git` in a test's own temporary repository doesn't count.
+
 ## 0.10.0 (2026-11-02)
 
 Added:

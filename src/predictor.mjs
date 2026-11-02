@@ -184,6 +184,7 @@ export function ingest(o) {
       loaded: putBlob(raw.loaded), reads: putBlob([...reads].sort()), unmapped: raw.unmapped,
       ...(Array.isArray(raw.pkgs) && runnerBlob ? { pkgs: putBlob(raw.pkgs), runnerPkgs: runnerBlob } : {}),
       ...(keyed.length ? { keyReads: putBlob(Object.fromEntries(keyed)) } : {}),
+      ...(raw.git ? { git: true } : {}),
       keys, consts: [...consts].sort(), durationMs: verdict.durationMs, recordedAt: new Date().toISOString(), host: c.host,
     });
     recorded++;
@@ -388,6 +389,9 @@ export function invalidates(ln, testFile, fp, H, nodeVersion, lock, info = {}) {
   const ageH = (nowMs() - Date.parse(fp.recordedAt)) / 3_600_000;
   if (!(ageH <= maxAge)) return `footprint older than ${maxAge} h (time-dependent tests)`;
   if (fp.commit === H) return null;
+  // A test that ran `git` on this repository read its history (recorder.mjs
+  // runsGitHere), and any other commit is new history. No file read shows that.
+  if (fp.git) return `runs git: history changed since ${fp.commit.slice(0, 9)}`;
   const ch = changesSince(fp.commit, H);
   if (!ch) return `footprint commit ${fp.commit.slice(0, 9)} unavailable`;
   let loaded, reads, keyReads = {};
@@ -571,6 +575,7 @@ export function reasonKey(r) {
     .replace(/^executed function .* in (\S+)$/, 'executed code in $1')
     .replace(/^constant \S+ in (\S+)$/, 'constant in $1')
     .replace(/^read key .* in (\S+)$/, 'read keys in $1')
+    .replace(/^runs git: .*$/, 'runs git (history changed)')
     .replace(/^footprint commit \S+ unavailable$/, 'footprint commit unavailable')
     .replace(/^lockfile changed: package \S+$/, 'lockfile changed: a package it loaded')
     .replace(/^predictor error: [\s\S]*/, 'predictor error');

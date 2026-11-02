@@ -33,6 +33,7 @@
 // moves this seam degrades to SAFE, and ingest prints the unmapped share so it
 // is noticed.
 import { Session } from 'node:inspector/promises';
+import cp from 'node:child_process';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -104,6 +105,40 @@ export class ModuleMap {
 }
 
 /**
+ * Does this child-process call run `git` against the repository under test? Tests that
+ * read commit history (`git log`, `git show`, a release-notes check) depend on every new
+ * commit, an input no file read shows. A `git` run in a directory OUTSIDE the repository
+ * (a test's own temp repo) is not this repository's history and does not count.
+ *   kind  'argv' (spawn, execFile and their Sync forms: file, args, options)
+ *         or 'shell' (exec, execSync: a command string, options)
+ * Exported for the tests. Never throws.
+ */
+export function runsGitHere(kind, file, args, opts, repoRoot, realpath = fs.realpathSync.native) {
+  try {
+    let argv;
+    if (kind === 'shell') {
+      if (typeof file !== 'string' || !/(^|[\s;&|(`])git(\s|$)/.test(file)) return false;
+      argv = file.trim().split(/\s+/);
+      const at = argv.findIndex((w) => /(^|\/)git$/.test(w));
+      argv = argv.slice(at);
+    } else {
+      if (typeof file !== 'string' || !/(^|\/)git$/.test(file)) return false;
+      argv = [file, ...(Array.isArray(args) ? args.map(String) : [])];
+    }
+    // Options: exec(cmd, options); spawn(file, args, options), or spawn(file, options).
+    const cand = kind === 'shell' ? args : !Array.isArray(args) && args && typeof args === 'object' ? args : opts;
+    const o = cand && typeof cand === 'object' ? cand : {};
+    const env = o.env ?? process.env;
+    let dir = path.resolve(typeof o.cwd === 'string' ? o.cwd : o.cwd instanceof URL ? o.cwd.pathname : process.cwd());
+    const c = argv.indexOf('-C');
+    if (c > 0 && argv[c + 1]) dir = path.resolve(dir, argv[c + 1]);
+    if (typeof env.GIT_DIR === 'string' && env.GIT_DIR) dir = path.resolve(dir, env.GIT_DIR);
+    let r; try { r = realpath(dir); } catch { r = dir; }
+    return r === repoRoot || r.startsWith(repoRoot + '/');
+  } catch { return false; }
+}
+
+/**
  * Install the recorder for the current test file. A no-op unless
  * `TRACEGATE_RECORD` is set.
  * @param {{ afterAll: Function, expect: { getState(): { testPath?: string } }, repoRoot: string, srcPrefix: string }} o
@@ -118,7 +153,7 @@ export async function installRecorder({ afterAll, expect, repoRoot, srcPrefix })
   // it, and whatever ran in between (its teardown, these setup files) is then
   // counted for this file. That can only ADD functions to a footprint, i.e. cause
   // extra runs, never hide one; and it saves one coverage take per file.
-  st.reads.clear(); st.keyReads.clear();
+  st.reads.clear(); st.keyReads.clear(); if (st.git) st.git.used = false;
   afterAll(() => takeFootprint(st, expect.getState().testPath ?? ''));
 }
 
@@ -171,6 +206,7 @@ export async function takeFootprint(st, testPath) {
     }
     const testFile = testPath.startsWith(st.repoRoot + '/') ? testPath.slice(st.repoRoot.length + 1) : testPath;
     const out = { v: 2, testFile, node: process.version, loaded: [...new Set(loaded)].sort(), exec, unmapped, reads: [...st.reads].sort(), pkgs: pkgsKnown ? [...pkgs].sort() : null };
+    if (st.git?.used) out.git = true;
     if (st.keyReads.size) out.keyReads = Object.fromEntries([...st.keyReads].sort(([a], [b]) => (a < b ? -1 : 1)).map(([f, ks]) => [f, [...ks].sort()]));
     const name = createHash('sha256').update(testFile).digest('hex').slice(0, 24) + '.json';
     st.write(path.join(st.outDir, 'raw', name), JSON.stringify(out));
@@ -256,13 +292,23 @@ async function init(outDir, repoRoot, srcPrefix, callCount = false) {
   wrap(fs, FS_SYNC);
   wrap(fs, FS_CB);
   wrap(fsp, FSP);
+  // A test that runs `git` on this repository reads its history (runsGitHere).
+  const git = { used: false };
+  for (const [n, kind] of [['spawn', 'argv'], ['spawnSync', 'argv'], ['execFile', 'argv'], ['execFileSync', 'argv'], ['exec', 'shell'], ['execSync', 'shell']]) {
+    const orig = cp[n];
+    if (typeof orig !== 'function') continue;
+    cp[n] = function (file, args, opts, ...rest) {
+      if (!git.used && runsGitHere(kind, file, args, opts, repoRoot, realpath)) git.used = true;
+      return orig.call(this, file, args, opts, ...rest);
+    };
+  }
   // Named imports of builtins (`import { readFileSync } from 'node:fs'`) bind the
   // ORIGINAL function unless this runs after patching. Without it a trace can
   // report zero repo reads where a real app test reads hundreds of files.
   syncBuiltinESMExports();
 
   fs.mkdirSync(path.join(outDir, 'raw'), { recursive: true });
-  return { session, reads, keyReads: new Map(), modules, repoRoot, srcPrefix, outDir, write, pkgReads, get pkgsKnown() { return st0.pkgsKnown; } };
+  return { session, reads, keyReads: new Map(), git, modules, repoRoot, srcPrefix, outDir, write, pkgReads, get pkgsKnown() { return st0.pkgsKnown; } };
 }
 
 /**
