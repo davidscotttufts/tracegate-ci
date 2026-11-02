@@ -445,6 +445,44 @@ fs.rmSync(fullLog);
   w(TEST, testBefore); commit('the test no longer imports it');
 }
 
+// ── keyed inputs in a table written as code, through the lane's extractor ───
+{
+  const TBL = 'packages/api/src/i18n.ts';
+  const tbl = (o) => w(TBL, 'export const messages = {\n' + Object.entries({ hello: 'Hello', bye: 'Bye', ...o }).map(([k, v]) => `  ${k}: '${v}',`).join('\n') + '\n};\n');
+  const ex = path.join(os.tmpdir(), `tg-extract-${process.pid}.mjs`);
+  fs.writeFileSync(ex, "let s = ''; process.stdin.on('data', (d) => { s += d; }).on('end', () => { if (s.includes('BROKEN')) process.exit(1); const o = {}; for (const m of s.matchAll(/(\\w+): '([^']*)'/g)) o[m[1]] = m[2]; console.log(JSON.stringify(o)); });\n");
+  const cfgPath = path.join(os.tmpdir(), `tg-keyed-config-${process.pid}.json`);
+  const c = JSON.parse(fs.readFileSync(path.join(repo, 'tracegate.config.json'), 'utf8')); c.lanes.api.keyedExtract = `node ${ex}`;
+  fs.writeFileSync(cfgPath, JSON.stringify(c));
+  const useExtractor = (on) => { if (on) process.env.TRACEGATE_CONFIG = cfgPath; else delete process.env.TRACEGATE_CONFIG; tg.resetContext(); };
+  const only = (raw) => { fs.rmSync(path.join(ledger, 'fp', 'api'), { recursive: true, force: true }); recordAt(execAt(fs.readFileSync(path.join(repo, SRC), 'utf8')), { raw }); };
+  tbl({}); commit('a table written as code');
+  useExtractor(true);
+  // The table is ALSO a loaded module here: the keyed rule must come first.
+  only({ loaded: [...LOADED, TBL], keyReads: { [TBL]: ['hello'] } });
+  tbl({ bye: 'Goodbye' }); commit('an unread key in a code table');
+  check('keyed (code table): an unread key reuses the verdict, even though the table is a loaded module', decideApi().run === false, JSON.stringify(decideApi()));
+  tbl({ hello: 'Hi', bye: 'Goodbye' }); commit('a read key in a code table');
+  check('keyed (code table): a key it read runs it, through the lane\'s extractor', /read key hello in packages\/api\/src\/i18n\.ts/.test(decideApi().reason ?? ''), JSON.stringify(decideApi()));
+  tbl({}); commit('table back');
+  w(TBL, fs.readFileSync(path.join(repo, TBL), 'utf8') + "globalThis.registered = true;\n"); commit('code, not data, in the table module');
+  check('keyed (code table): an edit to its CODE falls back to the module rule', /top-level change in packages\/api\/src\/i18n\.ts/.test(decideApi().reason ?? ''), JSON.stringify(decideApi()));
+  tbl({}); commit('table back, without the code');
+  only({ keyReads: { [TBL]: ['*'] } });
+  tbl({ bye: 'Later' }); commit('any edit, for a whole-table read');
+  check('keyed: the key * is a whole-table read: any edit runs it', /read key \* in/.test(decideApi().reason ?? ''), JSON.stringify(decideApi()));
+  tbl({}); commit('table back again');
+  only({ keyReads: { [TBL]: ['hello'] } });
+  tbl({ bye: 'BROKEN' }); commit('a table the extractor cannot read');
+  check('keyed: an extractor that fails counts as a change', /read key \* in/.test(decideApi().reason ?? ''), JSON.stringify(decideApi()));
+  tbl({}); commit('table back once more');
+  useExtractor(false);
+  only({ keyReads: { [TBL]: ['hello'] } });
+  tbl({ bye: 'See you' }); commit('no extractor configured');
+  check('keyed: with no extractor, a reported code table is a whole-file read input', /^read input packages\/api\/src\/i18n\.ts/.test(decideApi().reason ?? ''), JSON.stringify(decideApi()));
+  fs.rmSync(ex, { force: true }); fs.rmSync(cfgPath, { force: true });
+}
+
 // ── the recorder writes the keys a plugin reported into the raw footprint ───
 {
   const { recordKeyRead, takeFootprint } = await import('../src/recorder.mjs');

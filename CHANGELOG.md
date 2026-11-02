@@ -17,7 +17,9 @@
   `bus note`, the `bus_status` MCP tool, and `sync --remote gs://…`.
 - **Keyed inputs:** `recordKeyRead(file, key)` from `tracegate-ci/recorder`. A plugin
   that serves a table by key (an i18n catalog, a flag file) reports the keys a test
-  read, and a change to that JSON file re-runs only tests that read a changed key.
+  read, and a change to that table re-runs only tests that read a changed key. JSON is
+  compared directly; a table written as code goes through the lane's `keyedExtract`
+  command, and only edits to its data are narrowed. `*` is a whole-table read.
 - **The pre-select hook:** `lanes.<l>.preSelect`, a command that may add files to an
   enforce selection, never remove one. A hook that fails runs the lane whole.
 - **`tracegate daemon`:** the nightly full lane and pre-gating the train queue, in

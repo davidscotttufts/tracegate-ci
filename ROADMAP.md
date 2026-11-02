@@ -661,11 +661,17 @@ host's ADR 0980 P4):
 with this package. That is its decision and its gate; this phase only removes the
 reasons it could not.
 
-**Shipped:** `recordKeyRead` (keyed inputs, JSON compared by key between the footprint's
-commit and the tree under test; an imported JSON keeps the whole-file rule),
+**Shipped:** `recordKeyRead` (keyed inputs: JSON compared by key between the
+footprint's commit and the tree under test, and a table written as code through the
+lane's `keyedExtract` command, narrowed only for edits to its data; `*` is a whole-table
+read; an imported JSON keeps the whole-file rule). The code-table half was added after
+reading the host's i18n tracker: its tables are TypeScript modules, not JSON, so a
+JSON-only rule would not have let it retire anything.
+Also shipped:
 `lanes.<l>.preSelect` (adds only; a failing hook runs the lane whole), and
 `tracegate daemon` (`tick`, `status`, `install` for launchd and systemd). Witnesses:
-`keyed-compares-values`, `keyed-imported-is-whole`, `hook-failure-runs-all`,
+`keyed-compares-values`, `keyed-imported-is-whole`, `keyed-code-falls-back`,
+`keyed-star-is-whole`, `keyed-needs-a-reader`, `hook-failure-runs-all`,
 `hook-lane-files-only`, `daemon-in-a-worktree`, `daemon-skips-other-lockfile`,
 `daemon-retries-yielded`, `daemon-window-wraps`.
 

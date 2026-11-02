@@ -156,8 +156,12 @@ export function ingest(o) {
       for (const d of fi.defs) defs.push(d);
       for (const j of fi.jsonImports) { reads.add(j); imported.add(j); }
     }
-    const keyed = Object.entries(raw.keyReads ?? {}).filter(([f, ks]) => f.endsWith('.json') && !imported.has(f) && Array.isArray(ks) && ks.length);
-    for (const [f] of keyed) reads.add(f);
+    // Every file a plugin reported is at least a whole-file input. It is narrowed to its
+    // keys only when they can be compared: JSON natively, anything else through the
+    // lane's `keyedExtract` command. An imported JSON was read whole.
+    const reported = Object.entries(raw.keyReads ?? {}).filter(([, ks]) => Array.isArray(ks) && ks.length);
+    for (const [f] of reported) reads.add(f);
+    const keyed = reported.filter(([f]) => (f.endsWith('.json') ? !imported.has(f) : !!ln.keyedExtract));
     const referenced = (name) => {
       if (idents.has(name)) return true;
       const files = refFiles.get(name);
@@ -402,6 +406,15 @@ export function invalidates(ln, testFile, fp, H, nodeVersion, lock, info = {}) {
     const waived = covered && (p === covered || (path.posix.basename(p) === 'package.json' && depsOnlyPackageJson(showAt(fp.commit, p), showAt(H, p))));
     if (!waived && ln.global.test(p) && !isTestFile(p)) return `global input ${p}`;
     if (p === testFile) return 'the test file changed';
+    if (keyReads[p] && c.st !== 'D' && dataOnlyChange(ln, p, loaded, fp, H, c)) {
+      // Keyed input (recordKeyRead): only the values this test looked up matter. It
+      // comes before the loaded-module rule, because a table written as code (an i18n
+      // module) is also a loaded module; but only for an edit to its data. An edit to
+      // its code (a plural rule, a top-level call) falls through to the module rule.
+      const moved = changedKey(ln, p, keyReads[p], fp.commit, H);
+      if (moved === null) continue;
+      return `read key ${moved} in ${p}`;
+    }
     if (loaded.has(p)) {
       const isSrc = p.startsWith(ln.srcPrefix) && isTsFile(p) && !isTestFile(p);
       if (!isSrc) return `loaded module ${p}`;
@@ -418,25 +431,23 @@ export function invalidates(ln, testFile, fp, H, nodeVersion, lock, info = {}) {
       }
       continue;
     }
-    if (keyReads[p] && c.st !== 'D') {
-      // Keyed input: only the values this test looked up matter (recordKeyRead).
-      const moved = changedKey(p, keyReads[p], fp.commit, H);
-      if (moved === null) continue;
-      return `read key ${moved} in ${p}`;
-    }
     for (const r of reads) if (r === p || p.startsWith(r + '/')) return `read input ${p}`;
   }
   if (covered) info.deps = true;
   return null;
 }
 
-/** The first of `keys` whose value differs in JSON file `p` between two commits, or
- *  null when none does. A file that does not parse at either side is one change ('*').
- *  A key is looked up as a whole property name first (i18n keys hold dots), then as a
- *  dotted path. */
-function changedKey(p, keys, from, to) {
+/** The first of `keys` whose value differs in file `p` between two commits, or null
+ *  when none does. The key `*` means the test read the whole table: any edit counts.
+ *  JSON is parsed here; any other file goes through the lane's `keyedExtract` command
+ *  (the file's text on stdin, a JSON object of its values on stdout). A file that cannot
+ *  be read that way at either side is one change ('*'). A key is looked up as a whole
+ *  property name first (i18n keys hold dots), then as a dotted path. */
+function changedKey(ln, p, keys, from, to) {
+  const ta = showAt(from, p), tb = showAt(to, p);
+  if (keys.includes('*') && ta !== tb) return '*';
   let a, b;
-  try { a = JSON.parse(showAt(from, p)); b = JSON.parse(showAt(to, p)); } catch { return '*'; }
+  try { a = valuesOf(ln, p, ta); b = valuesOf(ln, p, tb); } catch { return '*'; }
   const get = (o, k) => {
     if (o && typeof o === 'object' && Object.hasOwn(o, k)) return o[k];
     let v = o; for (const part of k.split('.')) { if (v === null || typeof v !== 'object' || !Object.hasOwn(v, part)) return undefined; v = v[part]; }
@@ -444,6 +455,29 @@ function changedKey(p, keys, from, to) {
   };
   for (const k of keys) if (JSON.stringify(get(a, k)) !== JSON.stringify(get(b, k))) return k;
   return null;
+}
+
+/** Did the edit to keyed file `p` touch only data? A non-module file is all data. In a
+ *  loaded TypeScript module, every changed part must be a constant, a blank line or a
+ *  type-only import; a model error is not data. */
+function dataOnlyChange(ln, p, loaded, fp, H, c) {
+  if (!loaded.has(p) || !isTsFile(p)) return true;
+  try { return [...changedKeys(fp.commit, H, c)].every((k) => k === '<blank>' || k === '<import>' || k.startsWith('<const:')); } catch { return false; }
+}
+
+const _values = new Map(); // (lane, file, text hash) → values: one extractor run per table version
+function valuesOf(ln, p, text) {
+  if (text === null) return null;
+  if (p.endsWith('.json')) return JSON.parse(text);
+  if (!ln.keyedExtract) throw new Error('no keyedExtract');
+  const k = `${ln.name}\0${p}\0${hash16(text)}`;
+  if (_values.has(k)) return _values.get(k);
+  const r = spawnSync(ln.keyedExtract, { shell: true, cwd: ctx().root, input: text, encoding: 'utf8', timeout: 60_000, maxBuffer: 64 << 20, env: { ...process.env, TRACEGATE_KEYED_FILE: p }, stdio: ['pipe', 'pipe', 'inherit'] });
+  if (r.error || r.status !== 0) throw new Error(`keyedExtract failed on ${p}`);
+  const v = JSON.parse(r.stdout);
+  if (!v || typeof v !== 'object') throw new Error('keyedExtract printed no object');
+  _values.set(k, v);
+  return v;
 }
 
 // The dependency rule's bar, read once per selection rather than once per file.

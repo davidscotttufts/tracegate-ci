@@ -199,6 +199,7 @@ A **lane** is one Vitest project. `tracegate.config.json` at the repository root
 | `lanes.<l>.entryBar` | — | Per-lane override of the bar. A shorter `days` is an **early entry**; `earlyAudit` is the audit rate until the default bar's `days` would have been met. |
 | `lanes.<l>.lockfile` | auto | The lockfile hashed into every footprint (default: the first of `package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`, `yarn.lock` in `dir`, then at the root). |
 | `lanes.<l>.replayExclude` | `[]` | Test-file patterns `replay` must not list (e.g. an e2e folder Vitest does not run). |
+| `lanes.<l>.keyedExtract` | — | A command that reads a non-JSON keyed table (text on stdin) and prints its values as a JSON object, for [keyed inputs](#how-a-decision-is-made) in tables written as code. |
 | `lanes.<l>.preSelect` | — | A command that may **add** files to an enforce selection. It gets `{ lane, head, tree, files, selected, reused }` as JSON on stdin and prints test files (repo paths, one per line) that must run too. It can never remove one; a hook that fails, times out (120 s) or names a file that is not a test of the lane runs the lane whole. |
 | `entryBar` | `{ "days": 14, "observations": 20 }` | Enforce only after this many observations over this many days, with no un-triaged miss. |
 | `audit` | `0.05` | Share of reusable verdicts re-run anyway, uniformly at random. |
@@ -742,12 +743,24 @@ import { recordKeyRead } from 'tracegate-ci/recorder';
 const t = (key) => { recordKeyRead('src/locales/en.json', key); return messages[key]; };
 ```
 
-A change to that JSON file then re-runs only the tests that read a key whose value
-changed (a key is looked up as a whole property name first, so `greet.hello` works, then
-as a dotted path into nested objects). A test with no recorded keys for the file keeps
-the whole-file rule, and so does a test whose code imports the JSON itself. Call it only
-for reads your plugin makes on the test's behalf: a test that reads the file in full with
-`fs` cannot be told apart from the plugin.
+A change to that file then re-runs only the tests that read a key whose value changed (a
+key is looked up as a whole property name first, so `greet.hello` works, then as a
+dotted path into nested objects). Report the key `*` for a test that read the whole
+table: any edit to it runs that test.
+
+- **JSON** is compared directly. A test whose code imports the JSON itself read all of
+  it, and keeps the whole-file rule.
+- **A table written as code** (`export const messages = { … }` in an i18n module) needs
+  the lane's `keyedExtract` command: it gets the file's text on stdin (and its path in
+  `TRACEGATE_KEYED_FILE`) and prints the table's values as one JSON object. Without one,
+  the file is a plain whole-file input. Only an edit to the module's data is narrowed
+  by key: an edit to its code (a plural rule, a top-level call) follows the
+  [module rule](#how-a-decision-is-made). An extractor that fails counts as a change.
+- A test with no recorded keys for a file keeps the whole-file rule.
+
+Call it only for reads your plugin makes on the test's behalf: a test that reads the
+file in full with `fs`, or imports a code table directly, cannot be told apart from the
+plugin.
 
 **What a footprint does not see**: environment variables, the wall clock (hence the 72 h
 limit), the network and other processes. The random audit and the periodic full run are
