@@ -1,20 +1,20 @@
 # Tracegate report card
 
-Generated 2026-11-01T03:25:14.257Z on `MacBook-Pro-48` from the ledger's append-only logs.
+Generated 2026-11-02T12:39:42.842Z on `MacBook-Pro-48` from the ledger's append-only logs.
 
-Source: openwop-app, a private repository, lanes `backend` and `frontend`. One test path and one commit prefix are redacted; every number is as generated.
+Source: openwop-app, a private repository, lanes `backend` and `frontend`. Test paths and commit prefixes are redacted; every number is as generated. On 2026-11-02 the backend's 52 untriaged misses were triaged by re-running each file alone, three times, at the commit where it missed: 51 passed every time (flake) and 1 failed every time (a hole: a test whose result depends on git history, which the recorder can't see).
 
 ## Lane `backend`
 
 | | |
 |---|---|
-| Observed runs | 358 (358 shadow, 0 enforce), 2026-10-13 to 2026-11-01 |
-| Mean share of files that had to run | 41.00% |
-| Mean share of test time that had to run | 53.2% |
-| Reused verdicts checked | 577830 |
+| Observed runs | 369 (369 shadow, 0 enforce), 2026-10-13 to 2026-11-02 |
+| Mean share of files that had to run | 41.40% |
+| Mean share of test time that had to run | 53.8% |
+| Reused verdicts checked | 592275 |
 | Misses | 117 — 0.02% per checked verdict (95% CI 0.02% – 0.02%) |
-| Runs with a miss | 17 of 358 — 4.75% (95% CI 2.99% – 7.47%) |
-| Triage of misses | 1 hole, 64 flake, 52 untriaged |
+| Runs with a miss | 17 of 369 — 4.61% (95% CI 2.90% – 7.25%) |
+| Triage of misses | 2 hole, 115 flake, 0 untriaged |
 | Longest hole exposure | 1 h ([redacted] at [redacted]) |
 | Audit cost | 0 audited files over 0 that had to run (—) |
 
@@ -22,15 +22,15 @@ Source: openwop-app, a private repository, lanes `backend` and `frontend`. One t
 
 | | |
 |---|---|
-| Observed runs | 252 (221 shadow, 31 enforce), 2026-10-13 to 2026-11-01 |
-| Mean share of files that had to run | 14.10% |
+| Observed runs | 262 (222 shadow, 40 enforce), 2026-10-13 to 2026-11-02 |
+| Mean share of files that had to run | 14.00% |
 | Mean share of test time that had to run | 16.3% |
-| Reused verdicts checked | 204502 |
+| Reused verdicts checked | 206088 |
 | Misses | 10 — 0.00% per checked verdict (95% CI 0.00% – 0.01%) |
-| Runs with a miss | 7 of 252 — 2.78% (95% CI 1.35% – 5.62%) |
+| Runs with a miss | 7 of 262 — 2.67% (95% CI 1.30% – 5.41%) |
 | Triage of misses | 0 hole, 9 flake, 1 untriaged |
 | Longest hole exposure | — |
-| Audit cost | 1545 audited files over 3614 that had to run (42.75%) |
+| Audit cost | 1989 audited files over 5143 that had to run (38.67%) |
 
 ## Red Reader
 
