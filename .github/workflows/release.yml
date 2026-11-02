@@ -1,7 +1,7 @@
 name: release
-# Stages a release on npm when a maintainer pushes a tag vX.Y.Z that matches package.json.
-# Auth is npm Trusted Publishing (OIDC): no token secret. The release goes live only
-# after a maintainer approves it with 2FA: `npm stage list` / `npm stage approve <id>`.
+# Publishes to npm when a maintainer pushes a tag vX.Y.Z that matches package.json,
+# after the tests and the sabotage run pass. Auth is npm Trusted Publishing (OIDC): no
+# token secret, and the trusted publisher on npmjs.com must allow `npm publish`.
 on:
   push:
     tags: ['v*']
@@ -24,5 +24,5 @@ jobs:
         run: test "v$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME"
       - run: npm test
       - run: npm run test:sabotage
-      - run: npm install -g npm@latest # `npm stage` needs npm >= 11.15
-      - run: npm stage publish --access public
+      - run: npm install -g npm@latest # Trusted Publishing needs npm >= 11.5.1
+      - run: npm publish --provenance --access public
