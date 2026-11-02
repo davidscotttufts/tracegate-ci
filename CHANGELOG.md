@@ -1,7 +1,28 @@
 # Changelog
 
-## Unreleased
+## 0.10.0 (2026-11-02): two machines, keyed inputs, the daemon
 
+- **`tracegate sync` carries every evidence log.** It still synced only the five logs it
+  was written with, so escalations, approved skips (`silence-allow-`), green rows for
+  `attest`, Red Reader and dependency opinions, conductor scores and red and dependency
+  packets stayed on the machine that wrote them. An escalation on one machine never
+  suspended the lane on another. Every log is now listed as shared or machine-local
+  (the train queue and the daemon log are local), and the self-test fails on a log in
+  neither list.
+- **The release bus** (`"bus": "gs://…"` or a directory; `tracegate bus`): leases and
+  events that show what other machines are gating, training, deploying or releasing.
+  `train run` warns about another machine's live lease and holds its own. Advisory
+  only: nothing waits, refuses or freezes. Stale leases never warn, writes are
+  compare-and-swap with no lock, and an unreachable bus never fails the caller. Also
+  `bus note`, the `bus_status` MCP tool, and `sync --remote gs://…`.
+- **Keyed inputs:** `recordKeyRead(file, key)` from `tracegate-ci/recorder`. A plugin
+  that serves a table by key (an i18n catalog, a flag file) reports the keys a test
+  read, and a change to that JSON file re-runs only tests that read a changed key.
+- **The pre-select hook:** `lanes.<l>.preSelect`, a command that may add files to an
+  enforce selection, never remove one. A hook that fails runs the lane whole.
+- **`tracegate daemon`:** the nightly full lane and pre-gating the train queue, in
+  throwaway worktrees under a preemptible broker lease; `install` writes a launchd
+  agent or a systemd user timer.
 - **Releases publish directly.** A pushed tag runs the tests and the sabotage run, then
   `npm publish --provenance` through Trusted Publishing. Before, it staged the release
   and waited for a maintainer to approve it on npmjs.com.
