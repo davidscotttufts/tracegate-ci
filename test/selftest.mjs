@@ -6,7 +6,7 @@
 // Both directions are asserted on purpose: a predictor that always says "run"
 // fails the SKIP rows, and one that always says "skip" fails the RUN rows, so
 // neither degenerate predictor can pass. Every rule here has been broken on
-// purpose at least once to check that its row goes red (see README "Testing").
+// purpose at least once to check that its row goes red (see docs/guide.md, "Testing and releasing").
 //
 // Only this script's ✓/✗ lines are shown; the tool's own output ("1 MISS(ES)…")
 // is part of the scenarios and would read like a real miss in a CI log. Set
@@ -82,7 +82,10 @@ const lines = base.split('\n');
 const lineOf = (needle) => lines.findIndex((l) => l.includes(needle)) + 1;
 const LOADED = [SRC, BSRC, TEST];
 const passedResult = (files) => JSON.stringify({ testResults: files.map((f) => ({ name: path.join(repo, f), status: 'passed', startTime: 0, endTime: 10, assertionResults: [] })) });
-const tmpRun = () => fs.mkdtempSync(path.join(os.tmpdir(), 'tracegate-run-'));
+// Every run directory lives under one parent, removed at the end: several callers below
+// keep theirs, and each one left a tracegate-run-* in the OS temp dir per test run.
+const RUNS = fs.mkdtempSync(path.join(os.tmpdir(), 'tracegate-selftest-runs-'));
+const tmpRun = () => fs.mkdtempSync(path.join(RUNS, 'run-'));
 /** One recorded run of TEST (raw v1: exec as source start lines), ingested at HEAD. */
 const recordAt = (exec, o = {}) => {
   const r = tmpRun();
@@ -570,5 +573,6 @@ fs.rmSync(fullLog);
 fs.rmSync(repo, { recursive: true, force: true });
 fs.rmSync(er, { recursive: true, force: true });
 fs.rmSync(ledger, { recursive: true, force: true });
+fs.rmSync(RUNS, { recursive: true, force: true });
 realLog(fail ? `\n== tracegate self-test: ${fail} FAILED, ${passed} passed ==` : `\n== tracegate self-test: ${passed} passed ==`);
 process.exit(fail ? 1 : 0);
