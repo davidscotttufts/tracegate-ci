@@ -52,7 +52,7 @@ and a hook. In a Tracegate repository, the hook stops agents from running a bare
 or `npm test` outside the queue, and from triaging misses or approving skipped tests
 themselves. `TRACEGATE_HOOK=off` turns it off.
 
-What the plugin runs and touches:
+What the plugin runs and touches (also in [PRIVACY.md](PRIVACY.md)):
 
 - **Runs:** `node` on its own files (the MCP server over stdio, and the hook), `git`, your
   test runner, the commands you give `tracegate lease`, and `ssh-keygen` or `gpg` when you
