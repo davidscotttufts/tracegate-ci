@@ -6,7 +6,7 @@
 // Both directions are asserted on purpose: a predictor that always says "run"
 // fails the SKIP rows, and one that always says "skip" fails the RUN rows, so
 // neither degenerate predictor can pass. Every rule here has been broken on
-// purpose at least once to check that its row goes red (see README "Testing").
+// purpose at least once to check that its row goes red (see docs/guide.md, "Testing and releasing").
 //
 // Only this script's ✓/✗ lines are shown; the tool's own output ("1 MISS(ES)…")
 // is part of the scenarios and would read like a real miss in a CI log. Set

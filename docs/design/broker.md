@@ -1,6 +1,6 @@
 # Design: the Tracegate broker — one allocator for a machine's CI work
 
-Status: Proposed, Phase 0.5. Implemented in `src/broker/`.
+Status: implemented, in `src/broker/` (v0.2.0 on). Usage is in the [guide](../guide.md#broker); this is the design record.
 
 ## 1. The problem
 
@@ -182,35 +182,37 @@ blockedByReservation(j) = reservation exists and j is not preemptible
 Duration estimates come from the client's `--est`, else from the p90 of past runs of
 the same `(class, label)` in the event log.
 
-Since Phase 0.6, `capacity` above is the **current cpu budget** and every fit also checks
+With adaptive capacity (§9), `capacity` above is the **current cpu budget** and every fit also checks
 the **memory budget** (§9). `need` is clamped to both, and an elastic job (`minTokens`)
 is granted the widest width in `[minTokens, need]` that fits.
 
-## 7. Phases
+## 7. What was built
 
-| Phase | Work | Exit |
+| Piece | Version | Notes |
 |---|---|---|
-| 0.5a | Core scheduler, broker server, `lease`, `queue`, `explain`, MCP read tools, advisor hook (shadow) | Tests for I1–I8, including regression tests that reproduce F1, F2 and F3 and pass; rules sabotage-witnessed |
-| 0.5b | Adopt in the source project: gate, train, daemon, measurements and deploys all wrap in `tracegate lease`; the eight mechanisms retire one by one | Two weeks with no coordination incident |
-| 0.5b-1 | **Observe first (I10, done in v0.4.0):** each existing script starts `tracegate observe --class … --watch-pid $$ &` beside its current locks; the broker grants at once and records what it would have done; `tracegate observed` reports would-have-waited grants, behind whom, and minutes over budget | A week of observe data compared with what the eight mechanisms did; then retire one mechanism at a time, with the owner's decision |
-| 0.6 | Adaptive capacity (§9): cpu and memory budgets from live machine samples, elastic grants, learned memory per job, shedding of preemptible work, a starvation guard; hardware-relative defaults | Tests for I9 and the parsers on fixtures from two page sizes; rules sabotage-witnessed (done, v0.3.0) |
-| 0.5b-2 | **Yield (I11, done in v0.5.0):** `observe --yield` lets an observed gate hold the floor against preemptible leases across the priority gap: running ones are asked to yield, new ones wait while it lives. The background job runs under a real `lease --class daemon` and its own "stop when a gate starts" polling can retire | Live-tested (a daemon lease exits 75 when a yielding gate registers); rules sabotage-witnessed |
-| 0.5c | A make-compatible jobserver FIFO exported per lease (`lease --jobserver`, done in v0.5.0), for make 4.4+, Ninja 1.13+, cargo and rustc children | The FIFO protocol is tested through a real lease. **Not yet measured under a mixed workload**: the build machine has only GNU make 3.81, which predates the fifo form; the real-make check runs where make ≥ 4.4 is installed |
-| 2 | Conductor (ROADMAP Phase 2) as an advisor: fail-first and risk-aware composition | Shadow-scored |
-| 3+ | **Footprint-partitioned trains:** PRs with disjoint Tracegate footprints go into independent sub-queues, with a Zuul-style adaptive window and Trunk-style optimistic merging for flakes | False-independence rate measured before anything relies on it |
+| Scheduler, broker, `lease`, `queue`, `explain`, MCP read tools, advisor hook (shadow) | 0.2.0 | Regression tests reproduce F1, F2 and F3 and require them to resolve. |
+| Adaptive capacity (§9) | 0.3.0 | |
+| `observe` (I10): register work coordinated elsewhere, never waiting | 0.4.0 | The way to adopt the broker beside existing locks. |
+| `observe --yield` (I11): an observed gate holds off preemptible work | 0.5.0 | |
+| `lease --jobserver` | 0.5.0 | Tested through a real lease; not yet measured on a mixed workload with make ≥ 4.4. |
+| Footprint-partitioned trains | — | Waits for the Conductor's false-independence rate. |
+
+Retiring the source project's eight mechanisms is that project's decision, one at a time,
+on observe data.
 
 ## 8. Open questions
 
-- [x] **Capacity:** cores, or measured? **Both (Phase 0.6, §9):** the configured
+- [x] **Capacity:** cores, or measured? **Both (§9):** the configured
       capacity is the ceiling, and the broker narrows grants below it from measured
       load and memory. Work the broker cannot see is exactly what the samples measure.
-- [ ] **Remote runners:** the protocol should not preclude a second machine's broker
-      (sync of the event log), but nothing here depends on it.
+- [ ] **Remote runners:** each machine has its own broker. The release bus (0.10.0)
+      lets two machines see each other's trains and deploys, but it only warns; no
+      broker schedules another machine's work.
 - [ ] **Broker restart:** jobs from a previous broker instance are released with reason
       `broker-restart`, and wrappers see their socket close. Should a wrapper re-attach
       instead of failing its job? Today it keeps running its child and warns.
 
-## 9. Adaptive capacity (Phase 0.6)
+## 9. Adaptive capacity
 
 **The question.** Can the broker size work to the machine as it is right now: how many
 workers, and how much memory, given everything else that is running? And can one

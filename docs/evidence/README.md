@@ -1,20 +1,23 @@
 # Evidence
 
+Tracegate's claim is that a skipped test is a measured risk, not a guess. This folder holds
+the measurements: report cards generated from real ledgers. No number here is written by
+hand.
+
 ## Cards
 
 | Card | Project | Window | Runs |
 |---|---|---|---|
 | [openwop-app-2026-10](openwop-app-2026-10.md) ([JSON](openwop-app-2026-10.json)) | openwop-app (private), the project Tracegate was built in | 2026-10-13 to 2026-11-01 | 610 (579 shadow, 31 enforce) |
 
-
-Tracegate's claim is that a skipped test is a measured risk, not a guess. This folder holds the measurements, as report cards generated from a real ledger. No numbers here are written by hand.
+## Making one
 
 ```sh
 npx tracegate report-card --out docs/evidence/<project>-<yyyy-mm>.md        # Markdown
 npx tracegate report-card --json --out docs/evidence/<project>-<yyyy-mm>.json
 ```
 
-The card is computed from the ledger's append-only logs (`shadow-`, `misses-`, `triage-`, `escalations-`, `full-` and `conductor-` TSVs). It reads them and writes nothing back.
+The card is computed from the ledger's logs, and changes nothing.
 
 ## Reading a card
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Tracegate CLI. See README.md "Usage".
+// Tracegate CLI. See docs/guide.md.
 import fs from 'node:fs';
 import path from 'node:path';
 import { TOOL_DIR, lane } from './config.mjs';
