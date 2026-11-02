@@ -568,7 +568,28 @@ uncommitted-change scenario, and a CI job on TypeScript 7 with the alias. The di
 rule in `run.mjs` (no full run, no green row) is asserted by the e2e only: `runLane` has
 no unit harness, so it has no sabotage witness.
 
-### v1.0 criteria (status 2026-10-30)
+### Release 0.9.2: evidence and the directory (done 2026-11-02)
+
+**Why.** The plugin directory reads its listing from `plugin.json` and the README, and asks
+for a new version with every release. Publishing the first report card from the host
+project's ledger also found a bug in the card itself.
+
+**Corrections:**
+- **The report card's window was in read order, not time order.** A ledger holds one log
+  per host, read file by file, so a two-host ledger printed a window that started four
+  days late. Counts and rates were right. Witness `card-window-in-time-order`.
+- **A sabotage witness depended on timing.** `red-unique-ids` only tested "two packets in
+  one second" when the test happened to run fast, and went unwitnessed on a slow macOS
+  runner. It now writes both packets under a frozen clock.
+
+**Added:** the first report card (`docs/evidence/`), a plugin icon, the README section on
+what the plugin runs, reads, writes and sends, and `displayName`, `documentationUrl` and
+`supportUrl` in `plugin.json`.
+
+**Left to the owner:** submit the plugin to the directory, and triage the 52 untriaged
+backend misses in the host project, then regenerate the card.
+
+### v1.0 criteria (status 2026-11-02)
 
 - [x] CLI and MCP surface documented (README, `tracegate --help`, MCP tool descriptions).
 - [x] Report-card data from the host project published:
