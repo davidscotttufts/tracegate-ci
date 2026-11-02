@@ -457,7 +457,7 @@ const WITNESSES = [
     "'full-', 'escalations-', 'red-',", "'full-', 'red-',",
     'sync carries escalations, approved skips, opinions and red packets both ways', 'selftest.mjs'],
   ['sync-keeps-trainq-local', 'src/sync.mjs',
-    "export const LOCAL_LOGS = ['trainq-'];", "export const LOCAL_LOGS = [];\nSHARED_LOGS.push('trainq-');",
+    "export const LOCAL_LOGS = ['trainq-', 'daemon-'];", "export const LOCAL_LOGS = ['daemon-'];\nSHARED_LOGS.push('trainq-');",
     "sync leaves the other machine's train queue there", 'selftest.mjs'],
   ['sync-carries-packets', 'src/sync.mjs',
     "const SHARED_DIRS = ['fp', 'blobs', 'red', 'deps'];", "const SHARED_DIRS = ['fp', 'blobs'];",
