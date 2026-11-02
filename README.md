@@ -700,9 +700,8 @@ on TypeScript 7, parsing with 6 installed under the alias (a CI job).
 ## Releasing
 
 A pushed tag `vX.Y.Z` (matching `package.json`) runs `.github/workflows/release.yml`: the
-tests, the sabotage run, then `npm stage publish` through npm Trusted Publishing (OIDC, no
-token). The version goes live only when a maintainer approves it with 2FA, on npmjs.com or
-with `npm stage list` / `npm stage approve <id>` (npm 11.15 or later). Then
+tests, the sabotage run, then `npm publish --provenance` through npm Trusted Publishing
+(OIDC, no token). The version is live as soon as the workflow finishes. Then
 `mcp-publisher publish` updates the MCP Registry entry from `server.json`.
 
 ## License

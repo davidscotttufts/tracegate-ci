@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **Releases publish directly.** A pushed tag runs the tests and the sabotage run, then
+  `npm publish --provenance` through Trusted Publishing. Before, it staged the release
+  and waited for a maintainer to approve it on npmjs.com.
+
 ## 0.9.2 (2026-11-02): plugin directory readiness and the first report card
 
 - **The first published report card:** `docs/evidence/openwop-app-2026-10.md`, from the
