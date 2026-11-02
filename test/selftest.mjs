@@ -421,7 +421,32 @@ fs.rmSync(fullLog);
   tg.sync({ remote: peer });
   check('sync pulls the other machine\'s blobs and log', fs.existsSync(path.join(ledger, 'blobs', 'feedface.json.gz')) && fs.existsSync(path.join(ledger, 'shadow-othermac.tsv')));
   check('sync pushes ours to it', fs.readdirSync(path.join(peer, 'blobs')).length > 1 && fs.existsSync(path.join(peer, 'shadow-selftest.tsv')));
+  // The evidence added after sync was first written travels too: an escalation on the
+  // other machine must suspend the lane here, and a person's approved skip must hold here.
+  fs.writeFileSync(path.join(peer, 'escalations-othermac.tsv'), 'at\tlane\tfile\thead\tverdict\n');
+  fs.writeFileSync(path.join(peer, 'silence-allow-othermac.tsv'), 'at\tlane\n');
+  fs.writeFileSync(path.join(peer, 'red-opinions-othermac.jsonl'), '{}\n');
+  fs.mkdirSync(path.join(peer, 'red'), { recursive: true }); fs.writeFileSync(path.join(peer, 'red', 'api-0123456789ab-x.json'), '{}');
+  fs.writeFileSync(path.join(peer, 'trainq-othermac.tsv'), 'at\tpr\n');
+  fs.writeFileSync(path.join(ledger, 'escalations-selftest.tsv'), 'at\tlane\tfile\thead\tverdict\n');
+  tg.sync({ remote: peer });
+  check('sync carries escalations, approved skips, opinions and red packets both ways',
+    ['escalations-othermac.tsv', 'silence-allow-othermac.tsv', 'red-opinions-othermac.jsonl', 'red/api-0123456789ab-x.json'].every((f) => fs.existsSync(path.join(ledger, f)))
+    && fs.existsSync(path.join(peer, 'escalations-selftest.tsv')));
+  check('sync leaves the other machine\'s train queue there: it is not ours to run', !fs.existsSync(path.join(ledger, 'trainq-othermac.tsv')));
   fs.rmSync(peer, { recursive: true, force: true });
+}
+
+// ── every log the code writes is either shared or deliberately local ────────
+{
+  const { SHARED_LOGS, LOCAL_LOGS } = await import('../src/sync.mjs');
+  const PKG = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+  const src = fs.readdirSync(path.join(PKG, 'src')).filter((f) => f.endsWith('.mjs')).map((f) => fs.readFileSync(path.join(PKG, 'src', f), 'utf8')).join('\n');
+  const written = new Set([...src.matchAll(/appendTsv\('([a-z-]+-)'/g), ...src.matchAll(/`([a-z-]+-)\$\{ctx\(\)\.host\}\.jsonl`/g)].map((m) => m[1]));
+  const known = new Set([...SHARED_LOGS, ...LOCAL_LOGS]);
+  const missing = [...written].filter((p) => !known.has(p));
+  const both = SHARED_LOGS.filter((p) => LOCAL_LOGS.includes(p));
+  check('sync: every log the code writes is in SHARED_LOGS or LOCAL_LOGS, and none is in both', written.size >= 15 && !missing.length && !both.length, JSON.stringify({ missing, both, written: written.size }));
 }
 
 fs.rmSync(repo, { recursive: true, force: true });

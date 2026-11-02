@@ -398,6 +398,16 @@ const WITNESSES = [
   ['select-sees-uncommitted', 'src/predictor.mjs',
     "if (!git('status', '--porcelain', '--untracked-files=no').trim()) return { head: H, at: H, dirty: false };", "return { head: H, at: H, dirty: false };",
     'an UNCOMMITTED edit to a function the test ran makes it run in enforce', 'selftest.mjs'],
+  // Sync between machines (test/selftest.mjs).
+  ['sync-shares-escalations', 'src/sync.mjs',
+    "'full-', 'escalations-', 'red-',", "'full-', 'red-',",
+    'sync carries escalations, approved skips, opinions and red packets both ways', 'selftest.mjs'],
+  ['sync-keeps-trainq-local', 'src/sync.mjs',
+    "export const LOCAL_LOGS = ['trainq-'];", "export const LOCAL_LOGS = [];\nSHARED_LOGS.push('trainq-');",
+    "sync leaves the other machine's train queue there", 'selftest.mjs'],
+  ['sync-carries-packets', 'src/sync.mjs',
+    "const SHARED_DIRS = ['fp', 'blobs', 'red', 'deps'];", "const SHARED_DIRS = ['fp', 'blobs'];",
+    'sync carries escalations, approved skips, opinions and red packets both ways', 'selftest.mjs'],
 ];
 
 // A broken rule can make a check wait forever, and a test blocked in spawnSync

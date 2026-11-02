@@ -259,6 +259,10 @@ npx tracegate full-done --lane api                           # record a complete
 npx tracegate sync --remote user@host:/abs/path/.git/tracegate
 ```
 
+- **sync** exchanges the ledger with another machine over rsync. Footprints, blobs and red
+  and dependency packets are merged; every evidence log goes both ways, each machine
+  sending only its own (`<log>-<host>.tsv`). The train queue (`trainq-`) stays on its
+  machine, because another machine's queued PRs are not this one's to land.
 - **triage**: `hole` = a real footprint gap (fix the recorder); `flake` = the test fails on
   its own. Only `flake` lifts the suspension. Passing when re-run alone is not proof of a
   flake: read the failure. A wrong argument whose assertion depends on timing passes alone.
