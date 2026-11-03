@@ -19,16 +19,12 @@ bus. It runs in the private monorepo it came from, whose numbers are published i
 
 ## Next
 
-1. **Outside users.** Submit the Claude Code plugin to Anthropic's directory, and find two
-   repositories willing to run it in shadow and share their report card.
+1. **Outside users.** The Claude Code plugin is submitted to Anthropic's directory and in
+   review. Next, find two repositories willing to run it in shadow and share their report
+   card.
 2. **The host project moves onto the package.** It still runs its own copy of the
    predictor. Its ADR 1028 proposes switching lane by lane, after 20 gates where both
    predict side by side.
-3. **Tests that read git history** (fixed; in the next release). Triaging the host's
-   backlog (51 of 52 misses passed alone at their commit, three times each) found one real
-   hole: a test that reads commit subjects through `git log` failed after a new commit,
-   with nothing in its footprint changed. The recorder now notes a `git` run in the
-   repository, and such a test runs again after every new commit.
 
 ## Later
 
