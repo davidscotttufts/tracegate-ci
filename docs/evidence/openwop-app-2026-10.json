@@ -1,36 +1,36 @@
 {
-  "generatedAt": "2026-11-02T12:39:42.899Z",
+  "generatedAt": "2026-11-03T00:09:56.291Z",
   "host": "MacBook-Pro-48",
   "lanes": [
     {
       "lane": "backend",
       "observations": {
-        "runs": 369,
-        "shadow": 369,
+        "runs": 379,
+        "shadow": 379,
         "enforce": 0,
         "first": "2026-10-13T07:00:58.929Z",
-        "last": "2026-11-02T11:23:53.259Z",
-        "meanSelected": 0.414,
-        "meanTimePct": 53.758
+        "last": "2026-11-02T23:03:30.393Z",
+        "meanSelected": 0.417,
+        "meanTimePct": 54.115
       },
       "misses": {
-        "checked": 592275,
-        "missed": 117,
+        "checked": 606146,
+        "missed": 118,
         "rate": 0.0002,
         "wilson95": [
           0.0002,
           0.0002
         ],
-        "runsWithMiss": 17,
-        "perRun": 0.0461,
+        "runsWithMiss": 18,
+        "perRun": 0.0475,
         "perRunWilson95": [
-          0.029,
-          0.0725
+          0.0302,
+          0.0738
         ]
       },
       "triage": {
         "hole": 2,
-        "flake": 115,
+        "flake": 116,
         "untriaged": 0
       },
       "holes": [
@@ -62,16 +62,16 @@
     {
       "lane": "frontend",
       "observations": {
-        "runs": 262,
-        "shadow": 222,
-        "enforce": 40,
+        "runs": 270,
+        "shadow": 223,
+        "enforce": 47,
         "first": "2026-10-13T07:03:04.748Z",
-        "last": "2026-11-02T10:01:25.085Z",
-        "meanSelected": 0.14,
-        "meanTimePct": 16.285
+        "last": "2026-11-02T23:09:40.790Z",
+        "meanSelected": 0.144,
+        "meanTimePct": 16.766
       },
       "misses": {
-        "checked": 206088,
+        "checked": 207553,
         "missed": 10,
         "rate": 0,
         "wilson95": [
@@ -79,10 +79,10 @@
           0.0001
         ],
         "runsWithMiss": 7,
-        "perRun": 0.0267,
+        "perRun": 0.0259,
         "perRunWilson95": [
-          0.013,
-          0.0541
+          0.0126,
+          0.0525
         ]
       },
       "triage": {
@@ -93,9 +93,9 @@
       "holes": [],
       "longestExposure": null,
       "auditCost": {
-        "audited": 1989,
-        "mustRun": 5143,
-        "ratio": 0.3867
+        "audited": 2285,
+        "mustRun": 7735,
+        "ratio": 0.2954
       }
     }
   ],
