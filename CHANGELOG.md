@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.2 (2026-11-04)
 
 Added:
 - `tracegate report-card --redact` replaces test paths, commit prefixes and the host with
