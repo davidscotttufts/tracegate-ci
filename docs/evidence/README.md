@@ -8,7 +8,7 @@ hand.
 
 | Card | Project | Window | Runs |
 |---|---|---|---|
-| [openwop-app-2026-10](openwop-app-2026-10.md) ([JSON](openwop-app-2026-10.json)) | openwop-app (private), the project Tracegate was built in | 2026-10-13 to 2026-11-02 | 631 (591 shadow, 40 enforce) |
+| [openwop-app-2026-10](openwop-app-2026-10.md) ([JSON](openwop-app-2026-10.json)) | openwop-app (private), the project Tracegate was built in | 2026-10-13 to 2026-11-02 | 649 (602 shadow, 47 enforce) |
 
 ## Making one
 
@@ -29,4 +29,7 @@ The card is computed from the ledger's logs, and changes nothing.
 
 ## Publishing
 
-Publish a card only from a ledger whose owner agrees to it. A card names test files and commit prefixes, so review it first. A private project's card may redact test paths and commit prefixes, and says so; its numbers are never edited.
+To add your project's card here, open a [report card issue](https://github.com/davidscotttufts/tracegate-ci/issues/new?template=report-card.yml) with the card attached, or a pull request that adds it to this folder. See [the trial](../trial.md).
+
+
+Publish a card only from a ledger whose owner agrees to it. A card names test files and commit prefixes, so review it first. A private project's card may redact test paths, commit prefixes and the host (`report-card --redact`), and says so; its numbers are never edited.

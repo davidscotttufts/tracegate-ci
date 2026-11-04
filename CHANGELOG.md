@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+Added:
+- `tracegate report-card --redact` replaces test paths, commit prefixes and the host with
+  `[redacted]`, so a private project can share its card. No number changes.
+- [docs/trial.md](docs/trial.md): a two-week shadow trial, and how to share the card.
+
 ## 0.10.1 (2026-11-02)
 
 Fixed:

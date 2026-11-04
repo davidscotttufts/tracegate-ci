@@ -214,7 +214,7 @@ The ledger is `$(git rev-parse --git-common-dir)/tracegate/`, shared by every wo
 ```sh
 npx tracegate status                       # mode, entry bar and ledger per lane
 npx tracegate savings [--json]             # what reuse would have saved, from the first run
-npx tracegate report-card [--json] [--out file]
+npx tracegate report-card [--json] [--redact] [--out file]
 npx tracegate mode --lane api              # off | shadow | enforce
 npx tracegate triage --lane api --file <test> --verdict flake|hole [--head <sha>]
 npx tracegate replay --lane api --head <commit> --at <time> [--drop <regex>]
@@ -229,7 +229,8 @@ npx tracegate sync --remote user@host:/abs/path/.git/tracegate
   never counted as a saving.
 - **report-card** publishes the miss rate per checked verdict and per run, with 95% Wilson
   intervals, the triage of each miss, the longest a hole could have gone unnoticed, and the
-  audit cost. See [evidence/](evidence/).
+  audit cost. `--redact` replaces test paths, commit prefixes and the host with
+  `[redacted]`, for a private project's card. See [evidence/](evidence/).
 - **replay** re-decides a past run offline, with only the footprints recorded before it,
   optionally with some causes removed. It changes nothing in the ledger.
 - **sync** exchanges the ledger with another machine, over rsync or through a `gs://`

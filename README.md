@@ -33,6 +33,8 @@ npx tracegate run                  # runs the lane; in shadow, everything still 
 npx tracegate savings              # what skipping would have saved so far
 ```
 
+To try it for two weeks and share what it measured, see [docs/trial.md](docs/trial.md).
+
 `init` without `--write` only prints what it would do. It never overwrites an existing
 config, and it tells you which Vitest configs to edit by hand.
 
@@ -92,7 +94,7 @@ those. The full rules are in [How a decision is made](docs/guide.md#how-a-decisi
 | `tracegate run` | Select, run the tests, record, and learn from the result. |
 | `tracegate status` | Each lane's mode and progress toward the entry bar. |
 | `tracegate savings` | What skipping would have saved so far. |
-| `tracegate report-card` | Miss rates with 95% confidence intervals. |
+| `tracegate report-card` | Miss rates with 95% confidence intervals. `--redact` for a private repo. |
 | `tracegate triage` | Mark a miss as a flaky test or a recorder bug. |
 | `tracegate lease` | Run a command when the machine has room for it. |
 | `tracegate train` | Gate a queue of branches and land the green ones. |

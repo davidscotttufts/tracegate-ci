@@ -1,4 +1,4 @@
-// `tracegate report-card [--lane l] [--json] [--out file]` — the published error rates.
+// `tracegate report-card [--lane l] [--json] [--redact] [--out file]` — the published error rates.
 //
 // Everything here is read from the append-only logs (ledger.mjs); nothing is
 // re-derived from footprints and nothing is written to the ledger. Per lane:
@@ -82,11 +82,19 @@ export function reportCard(o = {}) {
   return { generatedAt: new Date().toISOString(), host: ctx().host, lanes: lanes.map(laneCard), redReader: redScore(), conductor: { order: orderSummary(), train: trainScore() } };
 }
 
+// A card a private project can share: test paths, commit prefixes and the host
+// become "[redacted]". No number changes.
+export function redactCard(card) {
+  const hide = (h) => h && { ...h, file: '[redacted]', head: '[redacted]' };
+  return { ...card, redacted: true, host: '[redacted]', lanes: card.lanes.map((l) => ({ ...l, holes: l.holes.map(hide), longestExposure: hide(l.longestExposure) })) };
+}
+
 const pct = (x) => (x === null || x === undefined ? '—' : `${(100 * x).toFixed(2)}%`);
 const ci = (w) => (w ? `${pct(w[0])} – ${pct(w[1])}` : '—');
 
 export function cardMarkdown(card) {
   const L = [`# Tracegate report card`, '', `Generated ${card.generatedAt} on \`${card.host}\` from the ledger's append-only logs.`, ''];
+  if (card.redacted) L.push('Test paths, commit prefixes and the host are redacted; every number is as generated.', '');
   for (const l of card.lanes) {
     const o = l.observations, m = l.misses;
     L.push(`## Lane \`${l.lane}\``, '',
@@ -112,7 +120,7 @@ export function cardMarkdown(card) {
 }
 
 export function printCard(o = {}) {
-  const card = reportCard(o);
+  const card = o.redact ? redactCard(reportCard(o)) : reportCard(o);
   const text = o.json ? JSON.stringify(card, null, 2) + '\n' : cardMarkdown(card);
   if (o.out && o.out !== true) { fs.mkdirSync(path.dirname(path.resolve(o.out)), { recursive: true }); fs.writeFileSync(o.out, text); console.log(`tracegate report-card: written to ${o.out}`); }
   else process.stdout.write(text);

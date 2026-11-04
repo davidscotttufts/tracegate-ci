@@ -59,7 +59,7 @@ const USAGE = `usage: tracegate <command> [options]
   version                              print the installed version (also --version, -v)
   savings [--lane l] [--json]          what reuse would have saved so far (from the shadow
                                        log, so it shows value before the entry bar is met)
-  report-card [--lane l] [--json] [--out file]
+  report-card [--lane l] [--json] [--redact] [--out file]
                                        miss rate with a 95% interval, hole exposure, audit
                                        cost, Red Reader and Conductor scores, from the logs
   sync    [--remote <[user@]host:/abs/ledger>]

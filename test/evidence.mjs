@@ -84,6 +84,12 @@ check('...and the mean share selected is per run', card.observations.meanSelecte
 const md = E.cardMarkdown(E.reportCard({}));
 check('the Markdown card states the rate with its interval and the exposure bound', /2\.00% per checked verdict \(95% CI \d/.test(md) && md.includes('12 h (x.test.ts at h2)') && md.includes('upper bound'), md);
 
+const red = E.redactCard(E.reportCard({ lane: 'app' }));
+const redJson = JSON.stringify(red);
+check('a redacted card hides test paths, commit prefixes and the host', !redJson.includes('x.test.ts') && !redJson.includes('"h2"') && red.host === '[redacted]' && red.lanes[0].longestExposure.file === '[redacted]', redJson);
+check('...and changes no number', red.lanes[0].misses.checked === card.misses.checked && red.lanes[0].triage.hole === card.triage.hole && red.lanes[0].longestExposure.exposureHours === 12);
+check('...and the Markdown says so', E.cardMarkdown(red).includes('redacted; every number is as generated') && !E.cardMarkdown(red).includes('x.test.ts'));
+
 // ── the window spans every host's log, in time order ────────────────────────
 // Logs are read file by file (shadow-a… before shadow-z…), so the first row read
 // is not the earliest: here host "a" logged later than host "z" did.
@@ -103,6 +109,8 @@ const env = { ...process.env };
 const out = path.join(tmp, 'card.json');
 execFileSync(process.execPath, [cli, 'report-card', '--json', '--out', out], { env, stdio: 'ignore' });
 check('`tracegate report-card --json --out` writes the card', JSON.parse(fs.readFileSync(out, 'utf8')).lanes[0].misses.checked === 100);
+const redMd = execFileSync(process.execPath, [cli, 'report-card', '--redact'], { env, encoding: 'utf8' });
+check('`tracegate report-card --redact` prints a redacted card', redMd.includes('[redacted]') && !redMd.includes('x.test.ts'), redMd);
 const sv = JSON.parse(execFileSync(process.execPath, [cli, 'savings', '--json'], { env, encoding: 'utf8' }));
 check('`tracegate savings --json` sums the reusable seconds', sv[0].reusableS === 144, JSON.stringify(sv));
 

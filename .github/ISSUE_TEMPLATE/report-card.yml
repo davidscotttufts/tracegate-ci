@@ -1,0 +1,48 @@
+name: Report card
+description: Share what Tracegate measured in your repository.
+title: "Report card: "
+labels: ["report-card"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for running it. Generate the card with `npx tracegate report-card --out tracegate-card.md`,
+        or with `--redact` for a private repository, and read it before you post. See docs/trial.md.
+  - type: input
+    id: project
+    attributes:
+      label: Project
+      description: A link if it's public, or a one-line description if it's private.
+    validations:
+      required: true
+  - type: dropdown
+    id: runner
+    attributes:
+      label: Test runner
+      options: [Vitest, Jest, Both]
+    validations:
+      required: true
+  - type: input
+    id: size
+    attributes:
+      label: Size
+      description: Roughly how many test files, in how many lanes.
+  - type: textarea
+    id: card
+    attributes:
+      label: The card
+      description: Paste the Markdown, or attach the file.
+      render: markdown
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything it got wrong or made hard
+      description: Setup trouble, misses you think were holes, numbers that look off.
+  - type: checkboxes
+    id: consent
+    attributes:
+      label: Publishing
+      options:
+        - label: The card can be added to docs/evidence/ with this project named as written above.
