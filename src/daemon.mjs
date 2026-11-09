@@ -18,6 +18,14 @@
 //     from what is installed is SKIPPED: its footprints would name packages it never had.
 //   - A piece is not retried within the same window once it ran (green, red or failed);
 //     a yielded piece is.
+//   - A TRACEGATE_CONFIG inside the repository is the worktree's own copy of that file,
+//     at the piece's commit; one outside it is passed on as given.
+//   - `install` carries TRACEGATE_CONFIG, TRACEGATE_LEDGER and the broker's location into
+//     the scheduler, which starts ticks with no environment of its own. A second ledger
+//     on one machine (a package beside a fork, say) yields to the gates only on THEIR
+//     broker: set TRACEGATE_BROKER_DIR to it (the socket is keyed by that directory).
+//   - `daemon.target` names a local branch or, failing that, a remote-tracking one
+//     ("origin/main"), for a checkout whose local main is not kept current.
 //
 // Log: `daemon-<host>.tsv`, machine-local (src/sync.mjs).
 import { spawnSync } from 'node:child_process';
@@ -44,6 +52,21 @@ export function inWindow(win, h = new Date().getHours()) {
   return a <= b ? h >= a && h < b : h >= a || h < b;
 }
 
+/** The target's commit: refs/heads/<target>, else refs/remotes/<target> ("origin/main"). */
+function tipOf(target) {
+  for (const ref of [`refs/heads/${target}`, `refs/remotes/${target}`]) {
+    try { return git('rev-parse', '--verify', '--quiet', `${ref}^{commit}`).trim(); } catch { /* try the next */ }
+  }
+  return null;
+}
+
+/** The variables a scheduled tick needs and the scheduler won't pass: absolute paths, as set now. */
+export function carriedEnv(env = process.env) {
+  const out = {};
+  for (const k of ['TRACEGATE_CONFIG', 'TRACEGATE_LEDGER', 'TRACEGATE_BROKER_DIR', 'TRACEGATE_BROKER_SOCKET']) if (env[k]) out[k] = path.resolve(env[k]);
+  return out;
+}
+
 /** What the next tick would do: [{ kind, lane, ref, sha, why }] and [{ ..., skip }]. */
 export function plan(o = {}) {
   const c = config();
@@ -51,7 +74,7 @@ export function plan(o = {}) {
   const log = readTsv('daemon-');
   const done = (kind, lane, sha, sinceMs) => log.some((r) => r.kind === kind && r.lane === lane && r.sha === sha && r.result !== 'yielded' && (!sinceMs || Date.parse(r.at) >= sinceMs));
   const todo = []; const skipped = [];
-  let tip = null; try { tip = git('rev-parse', '--verify', `refs/heads/${target}^{commit}`).trim(); } catch { /* no target branch */ }
+  const tip = tipOf(target);
   const lanes = o.lane && o.lane !== true ? [o.lane] : Object.keys(ctx().lanes);
   const maxH = ctx().fullRunMaxHours;
   const now = o.now ?? new Date();
@@ -95,7 +118,12 @@ function runPiece(item, o) {
     const gate = o.gate && o.gate !== true ? o.gate : c.gate ?? `"${process.execPath}" "${CLI}" run --lane ${item.lane}${item.kind === 'full' ? ' --mode shadow' : ''}`;
     const cmd = o['no-lease'] ? gate : `"${process.execPath}" "${CLI}" lease --class daemon --tokens ${Number(c.tokens) || 2} --label "daemon ${item.kind} ${item.lane} ${item.ref}" --quiet -- ${gate}`;
     const env = { ...process.env, TRACEGATE_ROOT: dir, TRACEGATE_DAEMON: item.kind };
-    delete env.TRACEGATE_CONFIG; // the worktree's own config, at that commit
+    // The worktree's own config, at that commit: the default file, or the same path inside it.
+    const cfg = process.env.TRACEGATE_CONFIG ? path.resolve(root, process.env.TRACEGATE_CONFIG) : null;
+    const rel = cfg ? path.relative(root, cfg) : '';
+    if (!cfg) delete env.TRACEGATE_CONFIG;
+    else if (!rel.startsWith('..') && !path.isAbsolute(rel)) env.TRACEGATE_CONFIG = path.join(dir, rel);
+    else env.TRACEGATE_CONFIG = cfg;
     const r = spawnSync(cmd, { shell: true, cwd: dir, env, stdio: o.quiet ? 'ignore' : 'inherit', timeout: (Number(c.timeoutMin) || 120) * 60_000 });
     const seconds = Math.round((Date.now() - t0) / 1000);
     if (r.error) return { result: 'failed', seconds, note: r.error.code === 'ETIMEDOUT' ? 'timed out' : r.error.message };
@@ -141,14 +169,16 @@ export function tick(o = {}) {
 }
 
 // ── install: a launchd agent (macOS) or a systemd user timer (Linux) ─────────
-const unitName = () => `dev.tracegate.${crypto.createHash('sha256').update(ctx().root).digest('hex').slice(0, 10)}`;
+// One unit per repository and config: a second config (its own lanes and ledger) gets its own.
+const unitName = (env = carriedEnv()) => `dev.tracegate.${crypto.createHash('sha256').update(env.TRACEGATE_CONFIG ? `${ctx().root}\0${env.TRACEGATE_CONFIG}` : ctx().root).digest('hex').slice(0, 10)}`;
 
 /** The scheduler files for this repository: [{ path, text }], and the commands to load them. */
 export function unitFiles(o = {}) {
   const c = config();
   const every = Number(o.every) > 0 ? Number(o.every) : Number(c.every) || 20;
   const home = o.home ?? os.homedir();
-  const name = unitName();
+  const env = carriedEnv(o.env ?? process.env);
+  const name = unitName(env);
   const logFile = path.join(ledgerDir(), 'daemon.log');
   const args = [process.execPath, CLI, 'daemon', 'tick', '--quiet'];
   const platform = o.platform ?? process.platform;
@@ -163,7 +193,7 @@ export function unitFiles(o = {}) {
   <key>ProgramArguments</key>
   <array>${args.map((a) => `<string>${esc(a)}</string>`).join('')}</array>
   <key>WorkingDirectory</key><string>${esc(ctx().root)}</string>
-  <key>StartInterval</key><integer>${every * 60}</integer>
+${Object.keys(env).length ? `  <key>EnvironmentVariables</key>\n  <dict>${Object.entries(env).map(([k, v]) => `<key>${k}</key><string>${esc(v)}</string>`).join('')}</dict>\n` : ''}  <key>StartInterval</key><integer>${every * 60}</integer>
   <key>ProcessType</key><string>Background</string>
   <key>LowPriorityIO</key><true/>
   <key>Nice</key><integer>10</integer>
@@ -180,7 +210,7 @@ export function unitFiles(o = {}) {
     return {
       name,
       files: [
-        { path: path.join(dir, `${name}.service`), text: `[Unit]\nDescription=Tracegate daemon tick for ${ctx().root}\n\n[Service]\nType=oneshot\nWorkingDirectory=${ctx().root}\nExecStart=${args.map(q).join(' ')}\nNice=10\nIOSchedulingClass=idle\nStandardOutput=append:${logFile}\nStandardError=append:${logFile}\n` },
+        { path: path.join(dir, `${name}.service`), text: `[Unit]\nDescription=Tracegate daemon tick for ${ctx().root}\n\n[Service]\nType=oneshot\nWorkingDirectory=${ctx().root}\n${Object.entries(env).map(([k, v]) => `Environment=${q(`${k}=${v}`)}\n`).join('')}ExecStart=${args.map(q).join(' ')}\nNice=10\nIOSchedulingClass=idle\nStandardOutput=append:${logFile}\nStandardError=append:${logFile}\n` },
         { path: path.join(dir, `${name}.timer`), text: `[Unit]\nDescription=Tracegate daemon tick every ${every} min\n\n[Timer]\nOnBootSec=5min\nOnUnitActiveSec=${every}min\n\n[Install]\nWantedBy=timers.target\n` },
       ],
       load: [['systemctl', '--user', 'daemon-reload'], ['systemctl', '--user', 'enable', '--now', `${name}.timer`]],
