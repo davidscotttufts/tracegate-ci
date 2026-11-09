@@ -365,7 +365,17 @@ npx tracegate daemon uninstall
 ```
 
 Settings: `"daemon": { "window": "1-6", "target": "main", "pregate": true, "tokens": 2,
-"every": 20, "timeoutMin": 120 }`. `window` is local hours.
+"every": 20, "timeoutMin": 120 }`. `window` is local hours. `target` is a local branch or,
+when there is none by that name, a remote-tracking one: use `"origin/main"` in a checkout
+whose local `main` isn't kept current.
+
+A `TRACEGATE_CONFIG` inside the repository is read from the worktree, at the piece's commit.
+`install` writes `TRACEGATE_CONFIG`, `TRACEGATE_LEDGER`, `TRACEGATE_BROKER_DIR` and
+`TRACEGATE_BROKER_SOCKET`, as set when you run it, into the launchd or systemd unit, because
+the scheduler starts ticks with no environment of its own. Each config gets its own unit.
+A second ledger on the same machine has its own broker, so its pieces don't yield to gates
+that use the first one. To share the gates' broker, set `TRACEGATE_BROKER_DIR` to its
+directory (`<their ledger>/broker/<host>`) before `install`.
 
 ## Release bus
 

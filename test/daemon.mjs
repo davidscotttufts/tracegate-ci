@@ -98,6 +98,26 @@ check('window: a malformed window is never open', !D.inWindow('nights', 3));
   check('red: a red piece is logged red and not retried', r3.ran.some((x) => x.ref === 'pr5' && x.result === 'red') && !r4.ran.some((x) => x.ref === 'pr5'), JSON.stringify({ r3: r3.ran, r4: r4.ran }));
 }
 
+// ── a config of its own, and a remote-tracking target ───────────────────────
+{
+  // A second config committed at ci/tg.json (its own lanes and ledger, as a package beside a fork).
+  w('ci/tg.json', JSON.stringify({ lanes: { app: { dir: '.', src: 'src' } } }));
+  g('add', '-A'); g('commit', '-qm', 'own config');
+  branch('pr6', 'src/six.txt', 'six\n'); T.add({ pr: 'pr6' });
+  const cfgSeen = path.join(tmp, 'cfg.log');
+  const gate = `node -e 'require("fs").appendFileSync(${JSON.stringify(cfgSeen)}, process.cwd() + " " + process.env.TRACEGATE_CONFIG + "\\n")'`;
+  process.env.TRACEGATE_CONFIG = path.join(repo, 'ci', 'tg.json');
+  const r = D.tick(opts({ gate }));
+  const [cwd, cfg] = (fs.existsSync(cfgSeen) ? fs.readFileSync(cfgSeen, 'utf8').trim().split('\n').pop() : '').split(' ');
+  check('config: a TRACEGATE_CONFIG inside the repo is the worktree\'s own copy at that commit', r.ran.some((x) => x.ref === 'pr6' && x.result === 'green') && !!cfg && cfg.replace(/^\/private/, '') === path.join(cwd, 'ci', 'tg.json').replace(/^\/private/, ''), JSON.stringify({ ran: r.ran, cwd, cfg }));
+  delete process.env.TRACEGATE_CONFIG;
+  T.drop({ pr: 'pr6' });
+
+  g('update-ref', 'refs/remotes/origin/main', 'pr1');
+  const p = D.plan({ now: night, target: 'origin/main' });
+  check('target: "origin/main" resolves to the remote-tracking branch when there is no local one', p.todo.some((t) => t.kind === 'full' && t.sha === g('rev-parse', 'pr1')), JSON.stringify(p.todo));
+}
+
 // ── one tick at a time ──────────────────────────────────────────────────────
 {
   const lock = path.join(ledger, 'daemon-daemon.lock');
@@ -117,6 +137,12 @@ check('window: a malformed window is never open', !D.inWindow('nights', 3));
   check('install (macOS): a launchd agent that runs `daemon tick` every 15 min at background priority', mac.files[0].path.startsWith(path.join(home, 'Library', 'LaunchAgents')) && plist.includes('<string>daemon</string><string>tick</string>') && plist.includes('<integer>900</integer>') && plist.includes('<string>Background</string>'), plist);
   const lin = D.unitFiles({ home, platform: 'linux', every: 15 });
   check('install (Linux): a systemd user service and timer', lin.files.length === 2 && lin.files[1].text.includes('OnUnitActiveSec=15min') && lin.files[0].text.includes('daemon" "tick"'), JSON.stringify(lin.files.map((f) => f.path)));
+  const env0 = { TRACEGATE_CONFIG: path.join(repo, 'ci', 'tg.json'), TRACEGATE_LEDGER: path.join(tmp, 'pkg-ledger'), TRACEGATE_BROKER_DIR: path.join(tmp, 'gates-broker') };
+  const macE = D.unitFiles({ home, platform: 'darwin', env: env0 });
+  check('install (macOS): the config, ledger and broker are carried into the agent', macE.files[0].text.includes('<key>EnvironmentVariables</key>') && Object.entries(env0).every(([k, v]) => macE.files[0].text.includes(`<key>${k}</key><string>${v}</string>`)), macE.files[0].text);
+  const linE = D.unitFiles({ home, platform: 'linux', env: env0 });
+  check('install (Linux): ...and into the service', Object.entries(env0).every(([k, v]) => linE.files[0].text.includes(`Environment="${k}=${v}"`)), linE.files[0].text);
+  check('install: a second config is a unit of its own; with none, the name is unchanged', macE.name !== mac.name && D.unitFiles({ home, platform: 'darwin', env: { TRACEGATE_LEDGER: env0.TRACEGATE_LEDGER } }).name === mac.name);
   const cli = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', 'src', 'cli.mjs');
   const env = { ...process.env, HOME: home };
   execFileSync(process.execPath, [cli, 'daemon', 'install', '--no-load', '--home', home], { env, stdio: 'ignore' });

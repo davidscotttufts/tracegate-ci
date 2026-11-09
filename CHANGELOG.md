@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+Fixed (the daemon, for a second config or ledger on one machine):
+- A `TRACEGATE_CONFIG` inside the repository was dropped in the worktree, so a piece ran
+  with the default config and wrote to the default ledger. It now reads the worktree's
+  copy at the piece's commit; a config outside the repository is passed on as given.
+- `daemon install` now carries `TRACEGATE_CONFIG`, `TRACEGATE_LEDGER` and the broker's
+  location into the launchd or systemd unit. Each config gets a unit of its own; with no
+  `TRACEGATE_CONFIG`, the unit's name doesn't change.
+- `daemon.target` can be a remote-tracking branch (`"origin/main"`) when no local branch
+  has that name.
+
 ## 0.10.2 (2026-11-04)
 
 Added:
