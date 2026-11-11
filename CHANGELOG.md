@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.3 (2026-11-11)
 
 Fixed (the daemon, for a second config or ledger on one machine):
 - A `TRACEGATE_CONFIG` inside the repository was dropped in the worktree, so a piece ran
