@@ -251,7 +251,10 @@ function mapOffsets(run, ex) {
   const mk = run + '\0' + ex.code;
   let mm = _maps.get(mk);
   if (mm === undefined) {
-    try { mm = new ModuleMap(fs.readFileSync(path.join(run, 'codes', ex.code + '.js'), 'utf8')); } catch { mm = null; }
+    try {
+      let ext = null; try { ext = fs.readFileSync(path.join(run, 'codes', ex.code + '.map.json'), 'utf8'); } catch { /* inline, or none */ }
+      mm = new ModuleMap(fs.readFileSync(path.join(run, 'codes', ex.code + '.js'), 'utf8'), ext);
+    } catch { mm = null; }
     _maps.set(mk, mm);
   }
   if (!mm || !mm.mappings) return null;

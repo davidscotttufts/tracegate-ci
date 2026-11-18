@@ -15,6 +15,13 @@ Fixed (the dependency rule, for releases):
 - A footprint recorded without package lists now says so in its reason
   ("lockfile changed (this footprint has no package lists)").
 
+Fixed (Vitest 5.1.1):
+- Vitest 5.1.1 inlines a module's source map only when an inspector is open, so every
+  module recorded as unmapped and Tracegate degraded to SAFE: no wrong skips, but no
+  savings either. The recorder now writes the module runner's own source map beside
+  the module's text, and ingest reads it when the text carries none. The text is left
+  byte-identical, so V8's offsets still match it.
+
 ## 0.10.3 (2026-11-11)
 
 Fixed (the daemon, for a second config or ledger on one machine):

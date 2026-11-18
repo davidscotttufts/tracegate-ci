@@ -229,6 +229,10 @@ const WITNESSES = [
   ['deps-package-json-beyond-deps', 'src/predictor.mjs',
     'const waived = covered && (p === covered ||', 'const waived = covered && (true ||',
     'rule: a package.json edit beyond dependencies is still a global input', 'deps.mjs'],
+  // vitest ≥ 5.1.1: the runner's source map, written beside the text, maps it.
+  ['source-map-beside-text', 'src/recorder.mjs',
+    "if (!map && external) {", "if (false) {",
+    'source map: the map written beside the text (vitest 5.1.1) maps it the same'],
   // A release (root-only lockfile + version bump) changes no installed package.
   ['deps-root-only-is-inert', 'src/predictor.mjs',
     'if (d.changed.size === 0 && d.native.length === 0) return { covered: d.lockfile, inert: true };', '',

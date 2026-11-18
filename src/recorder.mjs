@@ -43,6 +43,18 @@ import vm from 'node:vm';
 import { pkgOf } from './pkg.mjs';
 
 const WRAP_HEAD = "'use strict';async (";
+
+/** The source map vitest's module runner holds for a module id, or null. Read-only:
+ *  it looks the module up in the worker's evaluated-module registry. */
+function runnerSourceMap(id) {
+  try {
+    const reg = globalThis.__vitest_worker__?.evaluatedModules;
+    if (!reg || typeof id !== 'string') return null;
+    const mod = reg.getModuleById?.(id) ?? reg.idToModuleMap?.get(id);
+    const sm = mod?.meta?.sourceMap ?? mod?.meta?.map;
+    return sm && (typeof sm === 'string' || typeof sm.mappings === 'string') ? sm : null;
+  } catch { return null; }
+}
 const FS_SYNC = ['readFileSync', 'readdirSync', 'statSync', 'lstatSync', 'existsSync', 'openSync', 'accessSync', 'opendirSync', 'createReadStream'];
 const FS_CB = ['readFile', 'readdir', 'stat', 'lstat', 'access', 'open', 'opendir'];
 const FSP = ['readFile', 'readdir', 'stat', 'lstat', 'access', 'open', 'opendir'];
@@ -71,7 +83,10 @@ function decodeLine(seg, state) {
 
 /** A compiled module's text: its line table and inline source map. */
 export class ModuleMap {
-  constructor(code) {
+  /** `external`: the module's source map when the text carries none inline (vitest
+   *  ≥ 5.1.1 inlines it only with an inspector open; the recorder then writes the
+   *  runner's map beside the text). The inline map wins when both exist. */
+  constructor(code, external = null) {
     this.len = code.length;
     // vitest's wrapper is prepended to line 0; the source map describes <code>.
     this.prefix = code.startsWith(WRAP_HEAD) ? code.indexOf(')=>{{') + 5 : 0;
@@ -83,6 +98,7 @@ export class ModuleMap {
     const m = at >= 0 ? /^\/\/# sourceMappingURL=data:application\/json[^,]*,([A-Za-z0-9+/=]+)/.exec(code.slice(at)) : null;
     let map = null;
     if (m) { try { map = JSON.parse(Buffer.from(m[1], 'base64').toString('utf8')); } catch { map = null; } }
+    if (!map && external) { try { map = typeof external === 'string' ? JSON.parse(external) : external; } catch { map = null; } }
     this.mappings = map?.mappings?.split(';') ?? null;
   }
   /** Original 1-based source line for a 0-based offset into the code, or null. */
@@ -272,6 +288,15 @@ async function init(outDir, repoRoot, srcPrefix, callCount = false) {
           const sha = createHash('sha1').update(code).digest('hex');
           const p = path.join(codesDir, sha + '.js');
           if (!fs.existsSync(p)) { const tmp = `${p}.${process.pid}`; write(tmp, code); fs.renameSync(tmp, p); }
+          // vitest ≥ 5.1.1 inlines a module's source map only when an inspector is
+          // open; the module runner still holds it (`meta.sourceMap`, the fetch
+          // result). Written beside the text, never into it: V8's offsets are into
+          // the text as compiled, so the text must stay byte-identical.
+          const mp = path.join(codesDir, sha + '.map.json');
+          if (!code.includes('//# sourceMappingURL=data:application/json') && !fs.existsSync(mp)) {
+            const sm = runnerSourceMap(opts?.filename);
+            if (sm) { const tmp = `${mp}.${process.pid}`; write(tmp, typeof sm === 'string' ? sm : JSON.stringify(sm)); fs.renameSync(tmp, mp); }
+          }
           const variants = prev?.variants ?? new Set(); variants.add(sha);
           modules.set(file, { len: code.length, sha, ref: code, variants });
         }
