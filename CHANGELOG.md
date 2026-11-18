@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.10.4 (2026-11-18)
+
+Fixed (the dependency rule, for releases):
+- A lockfile change that changes no installed package, such as a release bumping only
+  the root package's own version, is no longer a dependency change. Footprints now
+  survive it without needing their package lists and without the dependency rule's bar.
+  Before, every footprint read "lockfile changed" after every release, so the whole lane
+  ran. Measured in a host repo's trial: 44 compared gates in which every file was
+  selected.
+- A `package.json` edit that only changes its own `version` is waived from the global
+  rule, the same way a dependency-only edit is. A test that reads `package.json` itself
+  still runs.
+- A footprint recorded without package lists now says so in its reason
+  ("lockfile changed (this footprint has no package lists)").
+
 ## 0.10.3 (2026-11-11)
 
 Fixed (the daemon, for a second config or ledger on one machine):
