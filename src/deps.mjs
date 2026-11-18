@@ -16,7 +16,8 @@
 //   - no changed package was loaded by this file's worker.
 // A change to `X/node_modules/b` also counts as a change to X (X now resolves a
 // different b). A package.json edit that only moves dependency fields is covered
-// by the lockfile; any other package.json edit is still a global input.
+// by the lockfile, as is a bump of its own `version`; any other package.json edit
+// is still a global input.
 //
 // It is held to its own bar (deps.mode `auto`, deps.bar): until `bar.runs`
 // lockfile runs over `bar.days` days scored it with no failure among the files it
@@ -38,7 +39,10 @@ import { appendTsv, ledgerDir, readTsv } from './ledger.mjs';
 
 export { pkgOf } from './pkg.mjs';
 
-const DEP_FIELDS = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies', 'peerDependenciesMeta', 'overrides'];
+// `version` too: a release bumping a package's own version changes nothing a test
+// loads through the global rule. A test that reads package.json itself is still
+// caught by its own recorded read (the waiver lifts only the GLOBAL rule).
+const DEP_FIELDS = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies', 'peerDependenciesMeta', 'overrides', 'version'];
 
 /** Does a package.json edit touch ONLY dependency fields? Pure over the two texts. */
 export function depsOnlyPackageJson(before, after) {

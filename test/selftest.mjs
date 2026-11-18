@@ -486,6 +486,21 @@ fs.rmSync(fullLog);
   fs.rmSync(ex, { force: true }); fs.rmSync(cfgPath, { force: true });
 }
 
+// ── vitest ≥ 5.1.1: the source map beside the text, not inline ───────────────
+{
+  const { ModuleMap } = await import('../src/recorder.mjs');
+  // `AAAA;AACA` maps generated line 0 → source line 1 and line 1 → source line 2.
+  const map = { version: 3, sources: ['x.ts'], names: [], mappings: 'AAAA;AACA' };
+  const head = "'use strict';async (a,b)=>{{";
+  const text = `${head}const a = 1;\nconst b = 2;\n}}`;
+  const inline = `${text}\n//# sourceMappingURL=data:application/json;base64,${Buffer.from(JSON.stringify(map)).toString('base64')}`;
+  const off = text.indexOf('const b');
+  check('source map: an inline map maps an offset to its source line (as before)', new ModuleMap(inline).originalLine(off) === 2);
+  check('source map: with no inline map and none beside it, the module is unmapped', new ModuleMap(text).originalLine(off) === null);
+  check('source map: the map written beside the text (vitest 5.1.1) maps it the same', new ModuleMap(text, JSON.stringify(map)).originalLine(off) === 2 && new ModuleMap(text, map).originalLine(head.length) === 1);
+  check('source map: a broken map beside the text leaves it unmapped, never throws', new ModuleMap(text, '{not json').originalLine(off) === null);
+}
+
 // ── a test that runs git on this repository depends on its history ──────────
 {
   const { runsGitHere } = await import('../src/recorder.mjs');
