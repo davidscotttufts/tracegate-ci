@@ -70,7 +70,7 @@ let d = decideAll();
 check('rule: a file that loaded the bumped package runs', d.ta.run && d.ta.reason === 'lockfile changed: package node_modules/a', d.ta.reason);
 check('rule (auto, bar not met): a file that did not still runs, marked would-reuse', d.tb.run && d.tb.depsWouldReuse === true, JSON.stringify(d.tb));
 check('rule: a file that READ the lockfile runs (only the global rule is waived)', d.tlock.run && /read input package-lock\.json/.test(d.tlock.reason), d.tlock.reason);
-check('rule: a footprint recorded without a package list runs, as before', d.told.run && d.told.reason === 'lockfile changed', d.told.reason);
+check('rule: a footprint recorded without a package list runs, and says why', d.told.run && d.told.reason === 'lockfile changed (this footprint has no package lists)', d.told.reason);
 ctx().deps.mode = 'enforce';
 d = decideAll();
 check('rule (enforce): a file that loaded no changed package keeps its verdict', !d.tb.run && d.tb.deps === true, JSON.stringify(d.tb));
@@ -94,7 +94,7 @@ check('rule: a changed package with native code runs the whole lane', d.ta.run &
 back(); commit('back3'); ingestAt('none');
 w('package-lock.json', lock({ ...P0, 'node_modules/a': { version: '1.2.0', integrity: 'sha-a3' } })); commit('bump a again');
 d = decideAll();
-check('rule: no list from the vitest process → the rule does not apply', d.tb.run && d.tb.reason === 'lockfile changed', d.tb.reason);
+check('rule: no list from the vitest process → the rule does not apply', d.tb.run && d.tb.reason === 'lockfile changed (this footprint has no package lists)', d.tb.reason);
 // package.json edited beyond its dependencies: still global.
 back(); commit('back4'); ingestAt();
 w('package.json', pkgJson({ a: '^1.1.0', b: '^1.0.0' }, { type: 'module' }));
@@ -108,6 +108,20 @@ w('package-lock.json', lock({ ...P0, 'node_modules/a': { version: '1.1.0', integ
 w('test/tb.test.ts', "it('t2', () => {});\n"); commit('bump a + edit tb');
 d = decideAll();
 check('rule: the other rules still apply across a lockfile change', d.tb.run && d.tb.reason === 'the test file changed', d.tb.reason);
+// A release: package.json and the lockfile bump only the app's OWN version. No
+// installed package moved, so nothing runs for it: not even a footprint with no
+// package lists, and not behind the rule's bar (auto, bar not met).
+back(); commit('back6'); ingestAt();
+ctx().deps.mode = 'auto';
+const relLock = JSON.parse(lock(P0)); relLock.version = '1.1.0'; relLock.packages[''].version = '1.1.0';
+w('package.json', pkgJson({ a: '^1.0.0', b: '^1.0.0' }).replace('"version": "1.0.0"', '"version": "1.1.0"'));
+w('package-lock.json', JSON.stringify(relLock, null, 2) + '\n'); commit('release 1.1.0');
+d = decideAll();
+check('release: a root-only lockfile + version bump reuses every verdict, with no bar', !d.ta.run && !d.tb.run && !d.ta.deps && !d.tb.deps, JSON.stringify([d.ta, d.tb]));
+check('release: ...including a footprint recorded without package lists', !d.told.run, JSON.stringify(d.told));
+check('release: a file that READ the lockfile still runs', d.tlock.run && /read input package-lock\.json/.test(d.tlock.reason), d.tlock.reason);
+check('package.json: a version-only bump counts as dependency-only', deps.depsOnlyPackageJson(pkgJson({ a: '^1.0.0' }), pkgJson({ a: '^1.0.0' }).replace('"version": "1.0.0"', '"version": "2.0.0"')));
+ctx().deps.mode = 'enforce';
 
 // ── the rule's own bar ───────────────────────────────────────────────────────
 ctx().deps.mode = 'auto';

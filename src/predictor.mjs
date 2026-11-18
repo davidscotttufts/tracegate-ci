@@ -365,9 +365,14 @@ export function clearLockDiffCache() { _lockDiffs.clear(); }
  */
 export function depsVerdict(ln, fp, H) {
   if (ctx().deps.mode === 'off') return { reason: 'lockfile changed' };
-  if (!fp.pkgs || !fp.runnerPkgs) return { reason: 'lockfile changed' };
   const d = lockDiffBetween(ln, fp.commit, H);
   if (!d) return { reason: 'lockfile changed' };
+  // A lockfile change that changed NO installed package (a release bumping the
+  // root's own version, say) is not a dependency change at all: nothing any test
+  // could have loaded moved. It needs neither the footprint's package lists nor the
+  // rule's bar. `inert` keeps it out of the dependency rule's scoring.
+  if (d.changed.size === 0 && d.native.length === 0) return { covered: d.lockfile, inert: true };
+  if (!fp.pkgs || !fp.runnerPkgs) return { reason: 'lockfile changed (this footprint has no package lists)' };
   if (d.native.length) return { reason: `lockfile changed: a package with native code (${d.native[0]})` };
   let pkgs, runner; try { pkgs = new Set(getBlob(fp.pkgs)); runner = new Set(getBlob(fp.runnerPkgs)); } catch { return { reason: 'footprint blob missing' }; }
   for (const k of d.changed) if (runner.has(k)) return { reason: `lockfile changed: ${k} (loaded by the vitest process)` };
@@ -379,11 +384,12 @@ export function depsVerdict(ln, fp, H) {
 export function invalidates(ln, testFile, fp, H, nodeVersion, lock, info = {}) {
   if (fp.v !== FP_VERSION) return 'footprint format changed';
   if (fp.node !== nodeVersion) return `node ${fp.node} → ${nodeVersion}`;
-  let covered = null;
+  let covered = null; let inert = false;
   if (fp.lock !== lock && !REPLAY.ignoreLock) {
     const dv = depsVerdict(ln, fp, H);
     if (dv.reason) return dv.reason;
     covered = dv.covered;
+    inert = !!dv.inert;
   }
   const maxAge = ctx().maxAgeHours;
   const ageH = (nowMs() - Date.parse(fp.recordedAt)) / 3_600_000;
@@ -437,7 +443,7 @@ export function invalidates(ln, testFile, fp, H, nodeVersion, lock, info = {}) {
     }
     for (const r of reads) if (r === p || p.startsWith(r + '/')) return `read input ${p}`;
   }
-  if (covered) info.deps = true;
+  if (covered && !inert) info.deps = true;
   return null;
 }
 
