@@ -633,6 +633,24 @@ fs.rmSync(fullLog);
   check('sync: every log the code writes is in SHARED_LOGS or LOCAL_LOGS, and none is in both', written.size >= 15 && !missing.length && !both.length, JSON.stringify({ missing, both, written: written.size }));
 }
 
+// ── a moved seam is visible, and a degraded run is not an observation ──────────
+{
+  const { appendTsv, readTsv, SEAM_HEADER, SHADOW_HEADER } = await import('../src/ledger.mjs');
+  check('seam: every ingest above records its seam reading for the lane', readTsv('seam-').some((r) => r.lane === 'api' && /^[0-9a-f]{12}$/.test(r.head) && Number.isFinite(Number(r.unmapped_pct))));
+  const before = tg.entryBar('api').observations;
+  const row = (head) => [new Date().toISOString(), 'api', 'shadow', head, 4, 4, 0, 0, 100, 0, 1, 0];
+  appendTsv('shadow-', SHADOW_HEADER, row('seamok000001')); appendTsv('seam-', SEAM_HEADER, [new Date().toISOString(), 'api', 'seamok000001', '0.0', '5.1.1']);
+  appendTsv('shadow-', SHADOW_HEADER, row('seambad00001')); appendTsv('seam-', SEAM_HEADER, [new Date().toISOString(), 'api', 'seambad00001', '100.0', '5.1.1']);
+  const b = tg.entryBar('api');
+  check('seam: a degraded run (unmapped > 5%) is not an entry-bar observation; a mapped one is', b.observations === before + 1 && b.degradedExcluded >= 1, JSON.stringify({ before, after: b.observations, ex: b.degradedExcluded }));
+  const sm = tg.seamOf('api');
+  check('seam: the lane reports its latest reading as degraded, with the share and the vitest version', sm?.degraded === true && sm.unmappedPct === 100 && sm.vitest === '5.1.1', JSON.stringify(sm));
+  const out = []; const log = console.log; console.log = (...a) => out.push(a.join(' ')); try { tg.status(); } finally { console.log = log; }
+  check('seam: `tracegate status` says DEGRADED on the lane line, and how many runs it did not count', out.some((l) => /^api: .*seam: DEGRADED \(100% unmapped/.test(l.replace(/\x1b\[[0-9;]*m/g, '')) && /degraded not counted/.test(l)), out.join('\n').slice(0, 400));
+  appendTsv('seam-', SEAM_HEADER, [new Date().toISOString(), 'api', 'seamok000002', '0.0', '5.1.1']);
+  check('seam: a later mapped ingest reads ok again', tg.seamOf('api')?.degraded === false);
+}
+
 fs.rmSync(repo, { recursive: true, force: true });
 fs.rmSync(er, { recursive: true, force: true });
 fs.rmSync(ledger, { recursive: true, force: true });

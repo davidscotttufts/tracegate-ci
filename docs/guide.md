@@ -174,7 +174,12 @@ the backstops, and a miss from either suspends the lane.
 
 **If the runner moves the recorder's seam** (after a Vitest upgrade, say), modules come
 back unmapped. A change to an unmapped module always means "run", so selection stays safe
-but gets coarse. `ingest` prints the unmapped share and warns above 5%.
+but gets coarse. `ingest` prints the unmapped share and warns above 5%. It also records it
+per lane (`seam-<host>.tsv`), so `tracegate status` and the MCP `lane_mode` tool show
+`seam: DEGRADED (N% unmapped)` until a mapped run comes back. A degraded run doesn't count
+as an entry-bar observation, because its coarse predictions say nothing about how the
+lane would select once enforcing. The gate itself never fails over it: SAFE is still a
+correct gate, just a slower one.
 
 ### Keyed inputs
 
