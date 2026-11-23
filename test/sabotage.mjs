@@ -229,6 +229,16 @@ const WITNESSES = [
   ['deps-package-json-beyond-deps', 'src/predictor.mjs',
     'const waived = covered && (p === covered ||', 'const waived = covered && (true ||',
     'rule: a package.json edit beyond dependencies is still a global input', 'deps.mjs'],
+  // A moved seam is visible, and a degraded run is not an observation (0.10.5).
+  ['seam-recorded-on-ingest', 'src/predictor.mjs',
+    "if (mapped + unmapped) appendTsv('seam-',", "if (false) appendTsv('seam-',",
+    'seam: every ingest above records its seam reading for the lane'],
+  ['seam-degraded-not-observed', 'src/predictor.mjs',
+    'const obs = all.filter((r) => !degraded.has(r.head));', 'const obs = all;',
+    'seam: a degraded run (unmapped > 5%) is not an entry-bar observation; a mapped one is'],
+  ['seam-shown-in-status', 'src/predictor.mjs',
+    '? `\\x1b[33mseam: DEGRADED (', '? `\\x1b[33mseam: ok (',
+    'seam: `tracegate status` says DEGRADED on the lane line'],
   // vitest ≥ 5.1.1: the runner's source map, written beside the text, maps it.
   ['source-map-beside-text', 'src/recorder.mjs',
     "if (!map && external) {", "if (false) {",

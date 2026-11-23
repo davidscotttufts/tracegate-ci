@@ -31,7 +31,7 @@ import { ModuleMap } from './recorder.mjs';
 import { runnerOf } from './runners/index.mjs';
 import {
   appendTsv, dropFps, getBlob, ledgerDir, putBlob, readFps, readTsv, writeFp,
-  DEPS_HEADER, FULL_HEADER, MISSES_HEADER, REASONS_HEADER, SHADOW_HEADER, TRIAGE_HEADER,
+  DEPS_HEADER, FULL_HEADER, MISSES_HEADER, REASONS_HEADER, SEAM_HEADER, SHADOW_HEADER, TRIAGE_HEADER,
 } from './ledger.mjs';
 
 // ── replay state ─────────────────────────────────────────────────────────────
@@ -192,7 +192,8 @@ export function ingest(o) {
   const share = mapped + unmapped ? (100 * unmapped / (mapped + unmapped)).toFixed(1) : '0.0';
   console.log(`tracegate ingest (${ln.name}): ${recorded} footprint(s) at ${H.slice(0, 9)} in ${Math.round((Date.now() - t0) / 1000)} s; ${dropped} dropped (not green); ${noVerdict} without a verdict; unmapped modules ${share}%.`);
   if (overBudget) console.log(`tracegate ingest (${ln.name}): time budget (${budgetMs / 1000} s) reached — ${overBudget} file(s) not recorded this run; they will simply run next time.`);
-  if (Number(share) > 5) {
+  if (mapped + unmapped) appendTsv('seam-', SEAM_HEADER, [new Date().toISOString(), ln.name, H.slice(0, 12), share, vitestVersion(ln) ?? '']);
+  if (Number(share) > SEAM_DEGRADED_PCT) {
     const v = vitestVersion(ln);
     const where = v ? `vitest ${v}${vitestTested(v) ? '' : ' (outside the tested range)'}` : 'this vitest';
     console.log(`\x1b[33mtracegate: DEGRADED TO SAFE — ${share}% of loaded modules could not be mapped; ${where} may have moved the recorder's seam (see src/recorder.mjs; \`tracegate doctor\` checks it). Predictions stay safe (unmapped ⇒ run) but get coarse.\x1b[0m`);
@@ -519,11 +520,28 @@ export function decide(testFile, H, nodeVersion, lock, laneName) {
   return { run: true, reason: first };
 }
 
+// ── seam ─────────────────────────────────────────────────────────────────────
+/** Above this unmapped share an ingest is DEGRADED: still safe (unmapped ⇒ run),
+ *  but its predictions are coarse, so it says nothing about what enforce would do. */
+export const SEAM_DEGRADED_PCT = 5;
+/** The lane's latest ingest seam reading, or null if none was recorded. */
+export function seamOf(laneName) {
+  const rows = readTsv('seam-').filter((r) => r.lane === laneName);
+  const r = rows[rows.length - 1];
+  if (!r) return null;
+  const pct = Number(r.unmapped_pct);
+  return { at: r.at, head: r.head, unmappedPct: pct, vitest: r.vitest || null, degraded: pct > SEAM_DEGRADED_PCT };
+}
+
 // ── mode + entry bar ─────────────────────────────────────────────────────────
 export function entryBar(laneName) {
   const ln = lane(laneName);
   const c = ctx();
-  const obs = readTsv('shadow-').filter((r) => r.lane === ln.name && (r.mode === 'shadow' || r.mode === 'enforce'));
+  // A run whose ingest was DEGRADED (the seam moved) is not an observation: its
+  // coarse predictions say nothing about how the recorder would select once enforcing.
+  const degraded = new Set(readTsv('seam-').filter((r) => r.lane === ln.name && Number(r.unmapped_pct) > SEAM_DEGRADED_PCT).map((r) => r.head));
+  const all = readTsv('shadow-').filter((r) => r.lane === ln.name && (r.mode === 'shadow' || r.mode === 'enforce'));
+  const obs = all.filter((r) => !degraded.has(r.head));
   // A miss triaged as a flake (`tracegate triage ... --verdict flake`) is a test
   // problem, not a footprint hole: it does not suspend enforcement. A `hole` does.
   // The LATEST verdict for a (lane, file, head) decides. A Red Reader escalation
@@ -543,7 +561,7 @@ export function entryBar(laneName) {
   // An early entry (a lane bar shorter than the default) audits harder until the
   // default bar would have been met.
   const auditRate = spanDays < c.entryBar.days && bar.earlyAudit !== undefined ? bar.earlyAudit : c.audit;
-  return { ok, spanDays: +spanDays.toFixed(1), observations: obs.length, recentMiss, missesTotal: misses.length, auditRate, bar };
+  return { ok, spanDays: +spanDays.toFixed(1), observations: obs.length, degradedExcluded: all.length - obs.length, recentMiss, missesTotal: misses.length, auditRate, bar };
 }
 
 // The full miss sweep over every reusable verdict needs a FULL run. A backstop
@@ -782,7 +800,11 @@ export function status() {
   for (const ln of Object.keys(c.lanes)) {
     const b = entryBar(ln);
     const d = modeDecision(ln);
-    console.log(`${ln}: mode ${d.mode} (${d.why}) · entry bar ${b.ok ? 'MET' : 'not met'} (${b.observations}/${b.bar.observations} observations, ${b.spanDays}/${b.bar.days} days, misses: ${b.missesTotal}${b.recentMiss ? ', a recent one' : ''}; audit ${Math.round(b.auditRate * 100)}% once enforcing)`);
+    const sm = seamOf(ln);
+    const seam = !sm ? 'seam: not recorded yet' : sm.degraded
+      ? `\x1b[33mseam: DEGRADED (${sm.unmappedPct}% unmapped at ${sm.head.slice(0, 9)}${sm.vitest ? `, vitest ${sm.vitest}` : ''}; safe but coarse, \`tracegate doctor\`)\x1b[0m`
+      : `seam: ok (${sm.unmappedPct}% unmapped)`;
+    console.log(`${ln}: mode ${d.mode} (${d.why}) · entry bar ${b.ok ? 'MET' : 'not met'} (${b.observations}/${b.bar.observations} observations${b.degradedExcluded ? `, ${b.degradedExcluded} degraded not counted` : ''}, ${b.spanDays}/${b.bar.days} days, misses: ${b.missesTotal}${b.recentMiss ? ', a recent one' : ''}; audit ${Math.round(b.auditRate * 100)}% once enforcing) · ${seam}`);
   }
   const rows = readTsv('shadow-').slice(-8);
   if (rows.length) { console.log('\nlast observations:'); for (const r of rows) console.log(`  ${r.at}  ${r.lane.padEnd(8)} ${r.mode.padEnd(7)} ${r.head}  must-run ${r.must_run}/${r.files}  time ${r.run_time_pct}%  misses ${r.misses}`); }

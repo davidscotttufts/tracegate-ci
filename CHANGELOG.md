@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.10.5 (2026-11-22)
+
+Added (a moved seam is visible where agents look):
+- Every ingest records the lane's unmapped share in `seam-<host>.tsv`, which `tracegate
+  sync` carries between machines.
+- `tracegate status` shows `seam: ok (N% unmapped)` or `seam: DEGRADED (N% unmapped at
+  <head>, vitest X)` on each lane's line, and the MCP `lane_mode` tool returns the same
+  reading as `seam`.
+- A degraded run (over 5% unmapped) no longer counts as an entry-bar observation, and
+  status says how many it set aside. Before, a Vitest upgrade that moved the seam could
+  quietly carry a lane toward enforce on predictions that were only coarse. Selection
+  itself was always safe: an unmapped module means "run".
+
 ## 0.10.4 (2026-11-18)
 
 Fixed (the dependency rule, for releases):

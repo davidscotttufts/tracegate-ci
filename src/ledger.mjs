@@ -98,6 +98,8 @@ export const MISSES_HEADER = ['at', 'lane', 'head', 'file', 'reason'];
 export const TRIAGE_HEADER = ['at', 'lane', 'file', 'head', 'verdict'];
 export const REASONS_HEADER = ['at', 'lane', 'mode', 'head', 'files', 'must_run', 'top'];
 export const FULL_HEADER = ['at', 'lane', 'head'];
+// One row per ingest: how much of what the lane loaded the recorder could map.
+export const SEAM_HEADER = ['at', 'lane', 'head', 'unmapped_pct', 'vitest'];
 export const ESCALATIONS_HEADER = ['at', 'lane', 'file', 'head', 'verdict', 'by', 'packet', 'confidence'];
 export const DEPS_HEADER = ['at', 'lane', 'mode', 'head', 'changed', 'would_reuse', 'reused', 'failed_of_those', 'files'];
 export const CONDUCTOR_HEADER = ['at', 'lane', 'head', 'files', 'failed', 'first_fail_rank', 'random_expected', 'mode'];

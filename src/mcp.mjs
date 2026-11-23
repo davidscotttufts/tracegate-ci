@@ -80,8 +80,8 @@ const READ_TOOLS = [
     annotations: { readOnlyHint: true },
     run: async () => {
       const { ctx } = await import('./config.mjs');
-      const { modeDecision, effectiveMode } = await import('./predictor.mjs');
-      return Object.keys(ctx().lanes).map((l) => ({ lane: l, mode: effectiveMode(l), why: modeDecision(l).why }));
+      const { modeDecision, effectiveMode, seamOf } = await import('./predictor.mjs');
+      return Object.keys(ctx().lanes).map((l) => ({ lane: l, mode: effectiveMode(l), why: modeDecision(l).why, seam: seamOf(l) }));
     },
   },
   {

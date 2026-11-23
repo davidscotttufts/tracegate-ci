@@ -16,7 +16,7 @@ import { ledgerDir } from './ledger.mjs';
 // stayed that way while escalations, approved skips, green rows and packets were added:
 // an escalation on one machine then never suspended the lane on the other.
 export const SHARED_LOGS = ['shadow-', 'misses-', 'triage-', 'reasons-', 'full-', 'escalations-', 'red-', 'red-opinions-',
-  'silenced-', 'silence-allow-', 'green-', 'conductor-', 'train-advice-', 'train-outcome-', 'deps-', 'deps-packets-', 'deps-opinions-'];
+  'silenced-', 'silence-allow-', 'green-', 'conductor-', 'train-advice-', 'train-outcome-', 'deps-', 'deps-packets-', 'deps-opinions-', 'seam-'];
 // This machine's own work: another machine's train queue is not ours to run, and its
 // daemon's log says what that machine did, not what this one still has to.
 export const LOCAL_LOGS = ['trainq-', 'daemon-'];
