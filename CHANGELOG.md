@@ -12,6 +12,8 @@ Fixed (a test that runs another process could be reused after a change it depend
   reused only at the commit it was recorded on and runs after any change, with the reason
   "runs a subprocess (its inputs are not recorded)". A spawn made only by tooling under
   `node_modules`, such as a transform service, doesn't count. `fork` is covered too.
+- `docs/compare/vitest-record-dependencies.md`, regenerated: row 4 (a script a test runs as a
+  child process) used to read "both tools miss it". Tracegate now selects the test.
 
 Upgrading:
 - Footprints recorded before 0.10.6 have no `subprocess` answer and are treated as opaque,

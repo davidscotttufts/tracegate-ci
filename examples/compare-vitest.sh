@@ -74,19 +74,21 @@ scenario() {
 # 1. A function in a shared module: Tracegate keys on the function, Vitest on the module.
 sed -i.bak 's/return round(a \* b);/return round(a * b + 1);/' src/math.ts && rm src/math.ts.bak
 scenario 'edit multiply() in src/math.ts' 'breaks multiply()' \
-  'test/multiply.test.ts' 'test/add.test.ts test/multiply.test.ts test/rates.test.ts test/report.test.ts'
+  'test/greet.test.ts test/multiply.test.ts' 'test/add.test.ts test/multiply.test.ts test/rates.test.ts test/report.test.ts'
 # 2. A function no test executes, in a module three tests load.
 sed -i.bak "s/return s.toLowerCase() + '...';/return s.toLowerCase() + '…';/" src/strings.ts && rm src/strings.ts.bak
 scenario 'edit whisper() in src/strings.ts' 'no test runs it' \
-  '' 'test/rates.test.ts test/report.test.ts test/strings.test.ts'
+  'test/greet.test.ts' 'test/rates.test.ts test/report.test.ts test/strings.test.ts'
 # 3. A data file read with fs at call time: not a module, so not in Vitest's record.
 echo '{ "standard": 0.25, "reduced": 0.05 }' > data/rates.json
 scenario 'edit data/rates.json' 'a value a test asserts' \
-  'test/rates.test.ts' ''
-# 4. A script a test runs as a child process: neither tool records the child.
+  'test/greet.test.ts test/rates.test.ts' ''
+# 4. A script a test runs as a child process: neither tool records the child. Since 0.10.6
+#    Tracegate knows the test ran one and treats it as opaque, so it runs after any change
+#    (and so is in every row above too); Vitest selects nothing.
 sed -i.bak "s/console.log('hello');/console.log('hullo');/" scripts/greet.mjs && rm scripts/greet.mjs.bak
 scenario 'edit scripts/greet.mjs' 'run by a test as a child process' \
-  '' ''
+  'test/greet.test.ts' ''
 # 5. A lockfile change: a patch bump of a package the test process loads.
 node -e '
   const fs = require("fs"); const l = JSON.parse(fs.readFileSync("package-lock.json", "utf8"));
