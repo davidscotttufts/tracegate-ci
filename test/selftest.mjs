@@ -90,7 +90,7 @@ const tmpRun = () => fs.mkdtempSync(path.join(RUNS, 'run-'));
 const recordAt = (exec, o = {}) => {
   const r = tmpRun();
   fs.mkdirSync(path.join(r, 'raw'));
-  fs.writeFileSync(path.join(r, 'raw', 'x.json'), JSON.stringify({ v: 1, testFile: TEST, node: process.version, loaded: LOADED, exec, unmapped: [], reads: ['data/read.json'], ...(o.raw ?? {}) }));
+  fs.writeFileSync(path.join(r, 'raw', 'x.json'), JSON.stringify({ v: 1, subprocess: false, testFile: TEST, node: process.version, loaded: LOADED, exec, unmapped: [], reads: ['data/read.json'], ...(o.raw ?? {}) }));
   fs.writeFileSync(path.join(r, 'results.json'), o.status === 'failed'
     ? JSON.stringify({ testResults: [{ name: path.join(repo, TEST), status: 'failed', startTime: 0, endTime: 10, assertionResults: [] }] })
     : passedResult([TEST]));
@@ -335,7 +335,7 @@ recordAt(execAt(base));
   g('checkout', '-q', '--detach', C1);
   const r = tmpRun();
   fs.mkdirSync(path.join(r, 'raw'));
-  fs.writeFileSync(path.join(r, 'raw', 'x.json'), JSON.stringify({ v: 1, testFile: TEST, node: process.version, loaded: [SRC], exec: { [SRC]: [1] }, unmapped: [], reads: [] }));
+  fs.writeFileSync(path.join(r, 'raw', 'x.json'), JSON.stringify({ v: 1, subprocess: false, testFile: TEST, node: process.version, loaded: [SRC], exec: { [SRC]: [1] }, unmapped: [], reads: [] }));
   fs.writeFileSync(path.join(r, 'results.json'), passedResult([TEST]));
   const fpd = path.join(ledger, 'fp', 'api'); fs.rmSync(fpd, { recursive: true, force: true });
   tg.ingest({ lane: 'api', run: r, 'budget-s': '-1' });
@@ -539,6 +539,55 @@ fs.rmSync(fullLog);
   check('git: the recorder marks the test file that ran git log here, and only that one',
     byTest['reads-history.test.ts']?.git === true && byTest['own-repo.test.ts'] && !byTest['own-repo.test.ts'].git, JSON.stringify(Object.fromEntries(raws.map((r) => [path.basename(r.testFile), r.git ?? null]))));
   fs.rmSync(out, { recursive: true, force: true }); fs.rmSync(other, { recursive: true, force: true });
+
+  // A test that runs another process (here `node`, from a repo file) is opaque; the same
+  // spawn made only by tooling under node_modules (a transform service) is not the test's.
+  const { calledFromRepo, isGitCommand } = await import('../src/recorder.mjs');
+  check('subprocess: git commands are told apart from other processes',
+    isGitCommand('argv', 'git') && isGitCommand('shell', 'git log -1') && !isGitCommand('argv', 'node') && !isGitCommand('shell', 'git log | sh') && !isGitCommand('shell', 'npm test'));
+  check('subprocess: a call is the repo\'s when a frame is a repo file outside node_modules',
+    calledFromRepo(`Error\n    at x (${R}/node_modules/execa/index.js:1:1)\n    at t (${R}/packages/api/test/a.test.ts:3:4)`, R)
+    && !calledFromRepo(`Error\n    at s (${R}/node_modules/esbuild/lib/main.js:1:1)\n    at node:internal/x:1:1`, R)
+    && !calledFromRepo(`Error\n    at t (/elsewhere/a.test.ts:3:4)`, R));
+  const out2 = fs.mkdtempSync(path.join(os.tmpdir(), 'tracegate-procrec-'));
+  fs.mkdirSync(path.join(R, 'packages/api/test/support'), { recursive: true });
+  fs.mkdirSync(path.join(R, 'node_modules/fake-tool'), { recursive: true });
+  const spawnHere = path.join(R, 'packages/api/test/support/spawns.mjs');
+  const spawnTool = path.join(R, 'node_modules/fake-tool/index.mjs');
+  fs.writeFileSync(spawnHere, "import { spawnSync } from 'node:child_process';\nexport const run = () => spawnSync(process.execPath, ['-e', '0']);\n");
+  fs.writeFileSync(spawnTool, "import { spawnSync } from 'node:child_process';\nexport const run = () => spawnSync(process.execPath, ['-e', '0']);\n");
+  const script2 = `
+    const { recorderState, takeFootprint } = await import(${JSON.stringify(path.join(PKG, 'src', 'recorder.mjs'))});
+    const st = await recorderState({ repoRoot: ${JSON.stringify(R)}, srcPrefix: 'packages/api/src/' });
+    const here = await import(${JSON.stringify(spawnHere)}), tool = await import(${JSON.stringify(spawnTool)});
+    const reset = () => { st.reads.clear(); st.git.used = false; st.git.subprocess = false; };
+    reset(); here.run(); await takeFootprint(st, ${JSON.stringify(path.join(R, 'packages/api/test/spawns.test.ts'))});
+    reset(); tool.run(); await takeFootprint(st, ${JSON.stringify(path.join(R, 'packages/api/test/tooling.test.ts'))});
+    reset(); await takeFootprint(st, ${JSON.stringify(path.join(R, 'packages/api/test/plain.test.ts'))});
+  `;
+  execFileSync(process.execPath, ['--input-type=module', '-e', script2], { env: { ...process.env, TRACEGATE_RECORD: out2 }, stdio: ['ignore', 'ignore', 'inherit'] });
+  const sp = Object.fromEntries(fs.readdirSync(path.join(out2, 'raw')).map((f) => JSON.parse(fs.readFileSync(path.join(out2, 'raw', f), 'utf8'))).map((r) => [path.basename(r.testFile), r.subprocess]));
+  check('subprocess: the recorder marks the test that spawned from repo code, not tooling\'s spawn or a plain test',
+    sp['spawns.test.ts'] === true && sp['tooling.test.ts'] === false && sp['plain.test.ts'] === false, JSON.stringify(sp));
+  fs.rmSync(out2, { recursive: true, force: true }); fs.rmSync(path.join(R, 'node_modules/fake-tool'), { recursive: true, force: true }); fs.rmSync(path.join(R, 'packages/api/test/support'), { recursive: true, force: true });
+
+  // The predictor: reused at its own commit, run after any new commit.
+  fs.rmSync(path.join(ledger, 'fp', 'api'), { recursive: true, force: true });
+  recordAt(execAt(fs.readFileSync(path.join(repo, SRC), 'utf8')), { raw: { subprocess: true } });
+  check('subprocess: at the commit it was recorded on, the verdict is reused', decideApi().run === false, JSON.stringify(decideApi()));
+  w('data/unrelated-note2.txt', 'a commit nothing in the footprint touches\n'); commit('another unrelated commit');
+  const dp = decideApi();
+  check('subprocess: after any change it runs, as its inputs are not recorded', dp.run === true && /runs a subprocess/.test(dp.reason), JSON.stringify(dp));
+  fs.rmSync(path.join(ledger, 'fp', 'api'), { recursive: true, force: true });
+  recordAt(execAt(fs.readFileSync(path.join(repo, SRC), 'utf8')), { raw: { subprocess: false } });
+  // As a footprint stored before 0.10.6 reads: no `subprocess` field at all.
+  for (const f of fs.readdirSync(path.join(ledger, 'fp', 'api'), { recursive: true }).map(String).filter((x) => x.endsWith('.json.gz'))) {
+    const p = path.join(ledger, 'fp', 'api', f), o = JSON.parse(zlib.gunzipSync(fs.readFileSync(p)));
+    delete o.subprocess; fs.writeFileSync(p, zlib.gzipSync(JSON.stringify(o)));
+  }
+  w('data/unrelated-note3.txt', 'and one more\n'); commit('a third unrelated commit');
+  const dq = decideApi();
+  check('subprocess: a footprint with no answer (an older recorder) is treated as opaque', dq.run === true && /runs a subprocess/.test(dq.reason), JSON.stringify(dq));
 
   // The predictor: reused at its own commit, run after any new commit.
   fs.rmSync(path.join(ledger, 'fp', 'api'), { recursive: true, force: true });

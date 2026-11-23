@@ -185,6 +185,7 @@ export function ingest(o) {
       ...(Array.isArray(raw.pkgs) && runnerBlob ? { pkgs: putBlob(raw.pkgs), runnerPkgs: runnerBlob } : {}),
       ...(keyed.length ? { keyReads: putBlob(Object.fromEntries(keyed)) } : {}),
       ...(raw.git ? { git: true } : {}),
+      subprocess: raw.subprocess !== false,
       keys, consts: [...consts].sort(), durationMs: verdict.durationMs, recordedAt: new Date().toISOString(), host: c.host,
     });
     recorded++;
@@ -402,6 +403,10 @@ export function invalidates(ln, testFile, fp, H, nodeVersion, lock, info = {}) {
   // A test that ran `git` on this repository read its history (recorder.mjs
   // runsGitHere), and any other commit is new history. No file read shows that.
   if (fp.git) return `runs git: history changed since ${fp.commit.slice(0, 9)}`;
+  // A test that ran another process depends on what that process read and ran, which
+  // no footprint shows (recorder.mjs isGitCommand). A footprint with no answer (from a
+  // recorder before 0.10.6) is treated the same way.
+  if (fp.subprocess !== false) return 'runs a subprocess (its inputs are not recorded)';
   const ch = changesSince(fp.commit, H);
   if (!ch) return `footprint commit ${fp.commit.slice(0, 9)} unavailable`;
   let loaded, reads, keyReads = {};

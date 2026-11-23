@@ -155,6 +155,37 @@ export function runsGitHere(kind, file, args, opts, repoRoot, realpath = fs.real
 }
 
 /**
+ * Is this child-process call a `git` run? A git run is judged by runsGitHere alone;
+ * any other process is opaque: what it reads and runs happens in another process, which
+ * this recorder cannot see (a test that runs `node scripts/check-x.mjs` depends on
+ * check-x.mjs and on everything it reads). Exported for the tests. Never throws.
+ */
+export function isGitCommand(kind, file) {
+  try {
+    if (kind === 'shell') return typeof file === 'string' && /^\s*(\S*\/)?git(\s|$)/.test(file) && !/[;&|`$(<>]/.test(file);
+    return typeof file === 'string' && /(^|\/)git$/.test(file);
+  } catch { return false; }
+}
+
+/**
+ * Did repository code (the test, or the code under test) make this call? The runner's own
+ * tooling spawns too (a transform service), from frames that are all in node_modules or
+ * node internals. A call counts when any frame is a repo file outside node_modules, so a
+ * test that spawns through a library (execa) still counts. Exported for the tests.
+ */
+export function calledFromRepo(stack, repoRoot) {
+  try {
+    for (const line of String(stack).split('\n').slice(1)) {
+      const m = line.match(/(?:\(|\s)(?:file:\/\/)?(\/[^():]+):\d+:\d+\)?\s*$/);
+      if (!m) continue;
+      const f = decodeURI(m[1]);
+      if ((f === repoRoot || f.startsWith(repoRoot + '/')) && !f.includes('/node_modules/') && !f.endsWith('/recorder.mjs')) return true;
+    }
+    return false;
+  } catch { return false; }
+}
+
+/**
  * Install the recorder for the current test file. A no-op unless
  * `TRACEGATE_RECORD` is set.
  * @param {{ afterAll: Function, expect: { getState(): { testPath?: string } }, repoRoot: string, srcPrefix: string }} o
@@ -169,7 +200,7 @@ export async function installRecorder({ afterAll, expect, repoRoot, srcPrefix })
   // it, and whatever ran in between (its teardown, these setup files) is then
   // counted for this file. That can only ADD functions to a footprint, i.e. cause
   // extra runs, never hide one; and it saves one coverage take per file.
-  st.reads.clear(); st.keyReads.clear(); if (st.git) st.git.used = false;
+  st.reads.clear(); st.keyReads.clear(); if (st.git) { st.git.used = false; st.git.subprocess = false; }
   afterAll(() => takeFootprint(st, expect.getState().testPath ?? ''));
 }
 
@@ -223,6 +254,8 @@ export async function takeFootprint(st, testPath) {
     const testFile = testPath.startsWith(st.repoRoot + '/') ? testPath.slice(st.repoRoot.length + 1) : testPath;
     const out = { v: 2, testFile, node: process.version, loaded: [...new Set(loaded)].sort(), exec, unmapped, reads: [...st.reads].sort(), pkgs: pkgsKnown ? [...pkgs].sort() : null };
     if (st.git?.used) out.git = true;
+    // Always written: a footprint without it (an older recorder) is treated as opaque.
+    out.subprocess = !!st.git?.subprocess;
     if (st.keyReads.size) out.keyReads = Object.fromEntries([...st.keyReads].sort(([a], [b]) => (a < b ? -1 : 1)).map(([f, ks]) => [f, [...ks].sort()]));
     const name = createHash('sha256').update(testFile).digest('hex').slice(0, 24) + '.json';
     st.write(path.join(st.outDir, 'raw', name), JSON.stringify(out));
@@ -317,13 +350,18 @@ async function init(outDir, repoRoot, srcPrefix, callCount = false) {
   wrap(fs, FS_SYNC);
   wrap(fs, FS_CB);
   wrap(fsp, FSP);
-  // A test that runs `git` on this repository reads its history (runsGitHere).
-  const git = { used: false };
-  for (const [n, kind] of [['spawn', 'argv'], ['spawnSync', 'argv'], ['execFile', 'argv'], ['execFileSync', 'argv'], ['exec', 'shell'], ['execSync', 'shell']]) {
+  // A test that runs `git` on this repository reads its history (runsGitHere). A test
+  // that runs any other process is opaque (isGitCommand): its footprint says so, and it
+  // is never reused across a change.
+  const git = { used: false, subprocess: false };
+  for (const [n, kind] of [['spawn', 'argv'], ['spawnSync', 'argv'], ['execFile', 'argv'], ['execFileSync', 'argv'], ['exec', 'shell'], ['execSync', 'shell'], ['fork', 'argv']]) {
     const orig = cp[n];
     if (typeof orig !== 'function') continue;
     cp[n] = function (file, args, opts, ...rest) {
-      if (!git.used && runsGitHere(kind, file, args, opts, repoRoot, realpath)) git.used = true;
+      try {
+        if ((n === 'fork' || !isGitCommand(kind, file)) && !git.subprocess && calledFromRepo(new Error().stack, repoRoot)) git.subprocess = true;
+        else if (!git.used && runsGitHere(kind, file, args, opts, repoRoot, realpath)) git.used = true;
+      } catch { /* recording must never change behaviour */ }
       return orig.call(this, file, args, opts, ...rest);
     };
   }

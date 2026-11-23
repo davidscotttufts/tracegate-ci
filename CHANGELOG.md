@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.10.6 (2026-11-23)
+
+Fixed (a test that runs another process could be reused after a change it depends on):
+- The recorder only noticed `git`. A test that ran any other process (`node
+  scripts/check-x.mjs`, a forked helper) recorded nothing of what that process read or ran.
+  So its verdict could be reused after `check-x.mjs` changed: a miss waiting to happen.
+  Found by comparing the package with a fork that treats such tests as opaque.
+- Now any `child_process` call made from repository code (the test, the code under test, or
+  a library they call such as `execa`) marks the footprint `subprocess`. Such a test is
+  reused only at the commit it was recorded on and runs after any change, with the reason
+  "runs a subprocess (its inputs are not recorded)". A spawn made only by tooling under
+  `node_modules`, such as a transform service, doesn't count. `fork` is covered too.
+
+Upgrading:
+- Footprints recorded before 0.10.6 have no `subprocess` answer and are treated as opaque,
+  so the first gate after upgrading runs the whole lane. Record once (a full run) to get
+  reuse back. Tests that spawn processes now always run after a change, so expect a
+  slightly wider selection than before. That is the price of not reusing what can't be seen.
+
 ## 0.10.5 (2026-11-22)
 
 Added (a moved seam is visible where agents look):

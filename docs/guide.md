@@ -168,8 +168,16 @@ messages) depends on its history, which no file read shows. The recorder notes w
 runs `git` in the repository, through any `child_process` call, and such a test runs again
 after every new commit. `git` run in a test's own temporary repository doesn't count.
 
+**A test that runs any other process** (`node scripts/check.mjs`, a CLI it builds, a helper
+it forks) depends on whatever that process reads and runs, and the recorder can't see into
+another process. So such a test is opaque: it is reused only at the commit it was recorded
+on, and runs after any change. A call counts when the test or repository code makes it,
+including through a library such as `execa`. The runner's own tooling spawning a service
+from `node_modules` doesn't count. A footprint recorded before 0.10.6 has no answer, so it
+is treated as opaque too.
+
 **What a footprint can't see:** environment variables, the clock (hence the 72-hour
-limit), the network, and what other processes read. The random audit and the daily full run are
+limit), the network. The random audit and the daily full run are
 the backstops, and a miss from either suspends the lane.
 
 **If the runner moves the recorder's seam** (after a Vitest upgrade, say), modules come
