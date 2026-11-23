@@ -52,7 +52,7 @@ const ingestAt = (runner = ['node_modules/r']) => {
   for (const t of ['ta', 'tb', 'tlock', 'told']) dropFps('default', `test/${t}.test.ts`); // one footprint per file: each case reads only its own
   const run = fs.mkdtempSync(path.join(tmp, 'run-'));
   fs.mkdirSync(path.join(run, 'raw'));
-  const raw = (testFile, pkgs, reads = []) => fs.writeFileSync(path.join(run, 'raw', `${path.basename(testFile)}.json`), JSON.stringify({ v: 1, testFile, node: process.version, loaded: [testFile], exec: {}, unmapped: [], reads, ...(pkgs === undefined ? {} : { pkgs }) }));
+  const raw = (testFile, pkgs, reads = []) => fs.writeFileSync(path.join(run, 'raw', `${path.basename(testFile)}.json`), JSON.stringify({ v: 1, subprocess: false, testFile, node: process.version, loaded: [testFile], exec: {}, unmapped: [], reads, ...(pkgs === undefined ? {} : { pkgs }) }));
   raw('test/ta.test.ts', ['node_modules/a']); raw('test/tb.test.ts', ['node_modules/b']); raw('test/tlock.test.ts', ['node_modules/b'], ['package-lock.json']); raw('test/told.test.ts', undefined);
   if (runner !== 'none') fs.writeFileSync(path.join(run, 'runner-pkgs.json'), JSON.stringify(runner));
   fs.writeFileSync(path.join(run, 'results.json'), JSON.stringify({ testResults: ['ta', 'tb', 'tlock', 'told'].map((t) => ({ name: path.join(repo, `test/${t}.test.ts`), status: 'passed', startTime: 0, endTime: 5, assertionResults: [] })) }));

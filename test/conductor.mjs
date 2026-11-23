@@ -65,7 +65,7 @@ const tg = await import('../src/predictor.mjs');
   fs.mkdirSync(path.join(run, 'raw'));
   // t0..t5 load src/a.ts (the wide one); t6 loads b; t7 loads c; d is loaded by no test.
   const loads = (i) => (i < 6 ? ['src/a.ts'] : i === 6 ? ['src/b.ts'] : ['src/c.ts']);
-  for (let i = 0; i < 8; i++) fs.writeFileSync(path.join(run, 'raw', `t${i}.json`), JSON.stringify({ v: 1, testFile: `test/t${i}.test.ts`, node: process.version, loaded: [`test/t${i}.test.ts`, ...loads(i)], exec: {}, unmapped: [], reads: [] }));
+  for (let i = 0; i < 8; i++) fs.writeFileSync(path.join(run, 'raw', `t${i}.json`), JSON.stringify({ v: 1, subprocess: false, testFile: `test/t${i}.test.ts`, node: process.version, loaded: [`test/t${i}.test.ts`, ...loads(i)], exec: {}, unmapped: [], reads: [] }));
   fs.writeFileSync(path.join(run, 'results.json'), JSON.stringify({ testResults: [...Array(8).keys()].map((i) => ({ name: path.join(repo, `test/t${i}.test.ts`), status: 'passed', assertionResults: [] })) }));
   const q = console.log; console.log = () => {}; try { tg.ingest({ lane: 'default', run }); } finally { console.log = q; }
 }
