@@ -270,6 +270,58 @@ function sim(capacity) {
   check('observed report: would-have-waited grants, behind whom, and minutes over the budget', r.observed === 1 && r.wouldWait === 1 && r.waits[0].behind[0] === 'gate a' && r.overCapacityMinutes === 2 && r.peakTokens === 4, JSON.stringify(r));
 }
 
+// I12 — on demand: a deploy a person asked for goes first, and preemptible work yields at once
+{
+  const s = sim(2);
+  const busy = s.add({ class: 'gate', tokens: 2, est: 600, label: 'gate busy' }); s.step();
+  const gate = s.add({ class: 'gate', tokens: 2, label: 'queued gate' });
+  const deploy = s.add({ class: 'deploy', tokens: 2, label: 'nightly deploy' });
+  const asked = s.add({ class: 'deploy', tokens: 2, label: 'deploy someone asked for', onDemand: true });
+  const out = s.step();
+  check('I12: an on-demand job never preempts a running gate', !out.preempts.includes(busy) && s.state(busy) === 'running' && s.state(asked) === 'queued', JSON.stringify(out));
+  check('I12: ...it holds the reservation, ahead of a deploy and a gate queued before it', out.reservation?.id === asked, JSON.stringify(out.reservation));
+  s.end(busy); s.step();
+  check('I12: ...and takes the freed capacity first', s.state(asked) === 'running' && s.state(deploy) === 'queued' && s.state(gate) === 'queued');
+}
+{
+  const s = sim(8);
+  const d = s.add({ class: 'daemon', tokens: 2 }); s.step();
+  const asked = s.add({ class: 'deploy', tokens: 1, onDemand: true }); const out = s.step();
+  check('I12: a running daemon is asked to yield at once, even with room for both', out.preempts.includes(d) && s.state(asked) === 'running', JSON.stringify(out));
+  s.end(d, 'preempted');
+  const d2 = s.add({ class: 'daemon', tokens: 1 }); s.step();
+  check('I12: no preemptible work starts while it lives', s.state(d2) === 'queued' && /on demand/.test(explain(s.st, d2, s.now()).text), explain(s.st, d2, s.now()).text);
+  const a = s.add({ class: 'adhoc', tokens: 1 }); s.step();
+  check('I12: work that is not preemptible is not held', s.state(a) === 'running');
+  s.end(asked); s.step();
+  check('I12: when it ends, the daemon starts', s.state(d2) === 'running');
+}
+{
+  // The priority gap does not protect preemptible work from an on-demand job.
+  const s = initialState({ capacity: 2, classes: { low: { priority: 45, preemptible: true }, mid: { priority: 50, preemptible: false } } });
+  let seq = 0; const at = 5;
+  apply(s, { seq: ++seq, at, type: 'enqueue', id: 'j1', class: 'low', tokens: 2 });
+  apply(s, { seq: ++seq, at, type: 'grant', id: 'j1', tokens: 2 });
+  apply(s, { seq: ++seq, at, type: 'enqueue', id: 'j2', class: 'mid', tokens: 2 });
+  const without = schedule(s, at).preempts.length;
+  apply(s, { seq: ++seq, at, type: 'enqueue', id: 'j3', class: 'mid', tokens: 2, onDemand: true });
+  check(`I12: an on-demand job preempts preemptible work inside the ${PREEMPT_GAP}-point gap; an ordinary one does not`, without === 0 && schedule(s, at).preempts.some((p) => p.id === 'j1'));
+  apply(s, { seq: ++seq, at, type: 'enqueue', id: 'j4', class: 'low', tokens: 1, onDemand: true });
+  check('I12: a preemptible job cannot be on demand', s.jobs.get('j4').onDemand === false);
+}
+// Several ledgers on one broker: what is learned stays per ledger
+{
+  const s = sim(1);
+  for (const secs of [100, 100, 100]) { const id = s.add({ class: 'gate', label: 'gate main', ledger: '/a/.git/tracegate' }); s.step(); s.tick(secs); s.end(id); }
+  for (const secs of [900, 900, 900]) { const id = s.add({ class: 'gate', label: 'gate main', ledger: '/b/.git/tracegate' }); s.step(); s.tick(secs); s.end(id); }
+  const a = s.add({ class: 'gate', label: 'gate main', ledger: '/a/.git/tracegate' }); s.step();
+  const b = s.st.jobs.get(a); const est = (l) => s.st.durations.get(`gate\u0000gate main\u0000${l}`);
+  check('ledgers: durations are kept per ledger, so repo B\'s "gate main" does not set repo A\'s estimate',
+    est('/a/.git/tracegate')?.every((x) => x === 100) && est('/b/.git/tracegate')?.every((x) => x === 900) && b.ledger === '/a/.git/tracegate', JSON.stringify([...s.st.durations]));
+  const old = s.add({ class: 'gate', label: 'gate main' });
+  check('ledgers: a job with no ledger (an older client) keys as before', s.st.jobs.get(old).ledger === null);
+}
+
 // ── Part 2: a live broker ─────────────────────────────────────────────────────
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-broker-test-'));
 const env = { ...process.env, TRACEGATE_BROKER_DIR: path.join(tmp, 'broker'), TRACEGATE_BROKER_SOCKET: path.join(tmp, 's.sock'), TRACEGATE_BROKER_CAPACITY: '2', TRACEGATE_BROKER_ADAPTIVE: 'off' };
@@ -449,6 +501,134 @@ await withAdvisor('invent', INVENT, 'enforce', async (h) => {
   check('advisor: ...and changes nothing', !h.events().some((e) => e.type === 'rank'));
   hog.s.destroy(); for (const c of cs) c.s.destroy();
 });
+// ── Part 4: one broker per machine (scope), version skew, on demand, live ─────
+// Two git repos, each with its own ledger (<repo>/.git/tracegate), and NO broker
+// override: only the scope decides whether they meet. HOME and TMPDIR are private to
+// the test, so the machine broker it starts is not this machine's real one.
+const mroot = fs.mkdtempSync(path.join(os.tmpdir(), 'tgm-'));
+const home = path.join(mroot, 'home'); const tdir = path.join(mroot, 't'); fs.mkdirSync(home); fs.mkdirSync(tdir);
+const mkRepo = (name, cfg) => { const r = path.join(mroot, name); fs.mkdirSync(r); spawnSync('git', ['init', '-q', r]); if (cfg) fs.writeFileSync(path.join(r, 'tracegate.config.json'), JSON.stringify(cfg)); return fs.realpathSync(r); };
+const repoA = mkRepo('repo-a', { broker: { capacity: 2, adaptive: { mode: 'off' } } });
+const repoB = mkRepo('repo-b', { broker: { capacity: 3, adaptive: { mode: 'off' } } });
+const menv = { ...process.env, HOME: home, TMPDIR: tdir, TRACEGATE_HOST: 'testhost' };
+for (const k of ['TRACEGATE_BROKER_DIR', 'TRACEGATE_BROKER_SOCKET', 'TRACEGATE_BROKER_CAPACITY', 'TRACEGATE_BROKER_ADAPTIVE', 'TRACEGATE_BROKER_SCOPE', 'TRACEGATE_LEASE', 'TRACEGATE_LEDGER', 'TRACEGATE_ROOT', 'TRACEGATE_CONFIG', 'TRACEGATE_CONTENDED']) delete menv[k];
+const leaseIn = (cwd, args, extra = {}) => { const p = spawn(process.execPath, [CLI, 'lease', '--quiet', ...args], { cwd, env: { ...menv, ...extra }, stdio: ['ignore', 'pipe', 'pipe'] }); let out = ''; p.stdout.on('data', (d) => { out += d; }); p.stderr.on('data', (d) => { out += d; }); started.add(p); const code = new Promise((r) => p.on('exit', (c) => { started.delete(p); r(c); })); return { p, code, out: () => out }; };
+const forever = [process.execPath, '-e', 'setInterval(()=>{},1000)'];
+const within = (pr, ms) => Promise.race([pr, sleep(ms).then(() => 'still running')]);
+// Stop every broker a scope test started (they are detached, with a 30 min idle exit).
+const stopBrokersUnder = (dir) => {
+  const walk = (d) => { let es = []; try { es = fs.readdirSync(d, { withFileTypes: true }); } catch { return; } for (const e of es) { const f = path.join(d, e.name); if (e.isDirectory()) walk(f); else if (e.name === 'broker.pid') { try { process.kill(Number(fs.readFileSync(f, 'utf8')), 'SIGTERM'); } catch { /* gone */ } } } };
+  walk(dir);
+};
+process.on('exit', () => stopBrokersUnder(mroot));
+const evsIn = (dir) => { try { return fs.readFileSync(path.join(dir, 'events.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)); } catch { return []; } };
+const machineDir = path.join(home, '.tracegate', 'broker', 'testhost');
+
+try {
+  // Two ledgers, one machine: a daemon lease from repo A yields to a gate from repo B.
+  {
+    const d = leaseIn(repoA, ['--class', 'daemon', '--tokens', '1', '--label', 'pregate', '--', ...forever]);
+    for (let i = 0; i < 80 && !evsIn(machineDir).some((e) => e.type === 'grant'); i++) await sleep(100);
+    const q = spawnSync(process.execPath, [CLI, 'queue', '--json'], { cwd: repoB, env: menv, encoding: 'utf8', timeout: 15000 });
+    let st = {}; try { st = JSON.parse(q.stdout); } catch { /* shown below */ }
+    check('scope machine: repo B sees repo A\'s running job, with its repo', st.scope === 'machine' && st.running?.some((j) => j.class === 'daemon' && j.repo === 'repo-a'), q.stdout + q.stderr);
+    const g = leaseIn(repoB, ['--class', 'gate', '--tokens', '2', '--', process.execPath, '-e', 'console.log("gate ran")']);
+    const dCode = await within(d.code, 10000);
+    check('scope machine: repo A\'s daemon lease yields (exit 75) to repo B\'s gate', dCode === 75, `${dCode} ${d.out()}`);
+    if (dCode !== 75) d.p.kill('SIGKILL');
+    const gCode = await within(g.code, 10000);
+    check('scope machine: ...and the gate runs', gCode === 0 && g.out().includes('gate ran'), `${gCode} ${g.out()}`);
+    check('scope machine: repo B was warned that the first broker\'s config (capacity 2, repo A\'s) is in force, not its own 3', /hands out 2 token\(s\); this repo's config gives 3/.test(g.out()) && /repo-a/.test(g.out()), g.out());
+    const evs = evsIn(machineDir);
+    const enq = evs.filter((e) => e.type === 'enqueue');
+    check('scope machine: one event log for both, each job recording its ledger and repo',
+      enq.some((e) => e.repo === 'repo-a' && e.ledger === path.join(repoA, '.git', 'tracegate')) && enq.some((e) => e.repo === 'repo-b' && e.ledger === path.join(repoB, '.git', 'tracegate')), JSON.stringify(enq));
+    check('scope machine: neither ledger got a broker of its own', !fs.existsSync(path.join(repoA, '.git', 'tracegate', 'broker')) && !fs.existsSync(path.join(repoB, '.git', 'tracegate', 'broker')));
+    const sock = fs.readdirSync(tdir).filter((f) => f.endsWith('.sock'));
+    check('scope machine: one socket, named by user and host (not by ledger), within the macOS length limit', sock.length === 1 && /^tracegate-m/.test(sock[0]) && Buffer.byteLength(path.join(tdir, sock[0])) < 104, JSON.stringify(sock));
+  }
+  // On demand, live: a daemon lease yields at once, though there is room for both.
+  {
+    const d = leaseIn(repoA, ['--class', 'daemon', '--tokens', '1', '--', ...forever]);
+    for (let i = 0; i < 80 && !(evsIn(machineDir).filter((e) => e.type === 'grant').length >= 3); i++) await sleep(100);
+    const od = leaseIn(repoB, ['--class', 'deploy', '--tokens', '1', '--on-demand', '--', process.execPath, '-e', 'console.log("deployed")']);
+    const dCode = await within(d.code, 10000);
+    check('on-demand live: a running daemon lease is stopped at once (exit 75), though 1 of 2 tokens was free', dCode === 75, `${dCode} ${d.out()}`);
+    if (dCode !== 75) d.p.kill('SIGKILL');
+    const odCode = await within(od.code, 10000);
+    check('on-demand live: ...and the requested deploy runs', odCode === 0 && od.out().includes('deployed'), `${odCode} ${od.out()}`);
+    const bad = spawnSync(process.execPath, [CLI, 'lease', '--class', 'daemon', '--on-demand', '--', process.execPath, '-e', '1'], { cwd: repoA, env: menv, encoding: 'utf8', timeout: 15000 });
+    check('on-demand live: a preemptible class is refused', bad.status === 2 && /preemptible/.test(bad.stderr), `${bad.status} ${bad.stderr}`);
+  }
+  // A second broker is never started beside a live one on the same socket.
+  {
+    const sockFile = path.join(tdir, fs.readdirSync(tdir).find((f) => f.endsWith('.sock')));
+    const pid0 = fs.readFileSync(path.join(machineDir, 'broker.pid'), 'utf8');
+    const dup = spawnSync(process.execPath, [CLI, 'broker', 'serve'], { cwd: repoB, env: menv, encoding: 'utf8', timeout: 15000 });
+    const again = spawnSync(process.execPath, [CLI, 'queue', '--json'], { cwd: repoA, env: menv, encoding: 'utf8', timeout: 15000 });
+    check('duplicate: `broker serve` beside a live broker exits, and the first keeps serving', /already serving/.test(dup.stderr) && JSON.parse(again.stdout || '{}').pid === Number(pid0) && fs.existsSync(sockFile), `${dup.status} ${dup.stderr} ${again.stdout}`);
+  }
+  stopBrokersUnder(home); await sleep(300);
+  fs.rmSync(path.join(home, '.tracegate'), { recursive: true, force: true });
+
+  // Scope ledger: the old separation. Each ledger gets its own broker, and they do not meet.
+  {
+    const le = { TRACEGATE_BROKER_SCOPE: 'ledger' };
+    const d = leaseIn(repoA, ['--class', 'daemon', '--tokens', '1', '--', ...forever], le);
+    const dirA = path.join(repoA, '.git', 'tracegate', 'broker', 'testhost');
+    for (let i = 0; i < 80 && !evsIn(dirA).some((e) => e.type === 'grant'); i++) await sleep(100);
+    const g = leaseIn(repoB, ['--class', 'gate', '--tokens', '2', '--', process.execPath, '-e', 'console.log("gate ran")'], le);
+    const gCode = await within(g.code, 10000);
+    await sleep(500);
+    check('scope ledger: repo B\'s gate runs on a broker of its own', gCode === 0 && fs.existsSync(path.join(repoB, '.git', 'tracegate', 'broker', 'testhost', 'events.jsonl')), `${gCode} ${g.out()}`);
+    check('scope ledger: ...and repo A\'s daemon is not asked to yield (the old behaviour)', d.p.exitCode === null && !evsIn(dirA).some((e) => e.type === 'preempt'), `${d.p.exitCode}`);
+    check('scope ledger: no machine broker was started', !fs.existsSync(machineDir));
+    d.p.kill('SIGTERM'); await within(d.code, 5000);
+  }
+  stopBrokersUnder(mroot); await sleep(300);
+
+  // Version skew: a 0.10.x broker (no protocol number in its hello) on the socket.
+  {
+    const oldSock = path.join(tdir, 'old.sock'); const oldDir = path.join(mroot, 'old-broker');
+    const conns = []; let requests = 0;
+    const old = net.createServer((s) => {
+      conns.push(s); let buf = ''; s.setEncoding('utf8');
+      s.on('data', (d) => { buf += d; let i; while ((i = buf.indexOf('\n')) >= 0) { const m = JSON.parse(buf.slice(0, i)); buf = buf.slice(i + 1);
+        if (m.op === 'hello') s.write(JSON.stringify({ type: 'hello', capacity: 2, pid: 4242 }) + '\n');
+        else if (m.op === 'request') { requests++; s.write(JSON.stringify({ type: 'granted', id: `j${requests}`, tokens: 1, fence: requests, nested: false, memMB: 0, contended: false }) + '\n'); }
+        else if (m.op === 'release') s.write(JSON.stringify({ type: 'ok', ref: m.ref }) + '\n'); } });
+    });
+    await new Promise((r) => old.listen(oldSock, r));
+    const oe = { TRACEGATE_BROKER_SOCKET: oldSock, TRACEGATE_BROKER_DIR: oldDir };
+    // Async: the fake broker runs in this process, so a spawnSync would starve it.
+    const run = (args) => new Promise((resolve) => { const p = spawn(process.execPath, [CLI, 'lease', '--quiet', ...args], { cwd: repoA, env: { ...menv, ...oe }, stdio: ['ignore', 'pipe', 'pipe'] }); started.add(p); const r = { stdout: '', stderr: '' }; p.stdout.on('data', (d) => { r.stdout += d; }); p.stderr.on('data', (d) => { r.stderr += d; }); const t = setTimeout(() => p.kill('SIGKILL'), 15000); p.on('exit', (c) => { clearTimeout(t); started.delete(p); resolve({ ...r, status: c }); }); });
+    const od = await run(['--class', 'deploy', '--on-demand', '--', process.execPath, '-e', 'console.log("RAN")']);
+    check('skew: --on-demand against a protocol-1 broker exits 76 without running the command', od.status === 76 && !od.stdout.includes('RAN') && requests === 0, `${od.status} ${od.stdout}${od.stderr}`);
+    check('skew: ...and says why: protocol, version, and what to do', /protocol 1/.test(od.stderr) && /0\.10\.x or older/.test(od.stderr) && /Nothing was started beside it/.test(od.stderr), od.stderr);
+    check('skew: ...and starts no second broker beside it', !fs.existsSync(path.join(oldDir, 'broker.pid')) && !fs.existsSync(path.join(oldDir, 'broker.log')));
+    const plain = await run(['--', process.execPath, '-e', 'console.log("RAN")']);
+    check('skew: a plain lease still runs on the older broker, with a warning', plain.status === 0 && plain.stdout.includes('RAN') && /older than this client/.test(plain.stderr), `${plain.status} ${plain.stdout}${plain.stderr}`);
+    for (const c of conns) c.destroy(); old.close();
+  }
+  // Version skew, the other way: the broker refuses a client older than it serves.
+  {
+    const e = { ...env, TRACEGATE_BROKER_DIR: path.join(mroot, 'skew-b'), TRACEGATE_BROKER_SOCKET: path.join(tdir, 'sk.sock') };
+    const b = startBroker(e, 'ignore');
+    for (let i = 0; i < 50 && !fs.existsSync(e.TRACEGATE_BROKER_SOCKET); i++) await sleep(100);
+    const s = await new Promise((resolve) => { const c = net.connect(e.TRACEGATE_BROKER_SOCKET); const msgs = []; let buf = ''; c.setEncoding('utf8'); c.on('data', (d) => { buf += d; let i; while ((i = buf.indexOf('\n')) >= 0) { msgs.push(JSON.parse(buf.slice(0, i))); buf = buf.slice(i + 1); } }); c.once('connect', () => resolve({ c, msgs })); });
+    s.c.write(JSON.stringify({ op: 'hello', ref: 'h', protocol: 0 }) + '\n');
+    s.c.write(JSON.stringify({ op: 'hello', ref: 'h2', protocol: 2 }) + '\n');
+    await sleep(400);
+    const r0 = s.msgs.find((m) => m.ref === 'h'); const r2 = s.msgs.find((m) => m.ref === 'h2');
+    check('skew: the broker refuses a hello below its minimum protocol, with a code', r0?.type === 'error' && r0.code === 'protocol', JSON.stringify(r0));
+    check('skew: ...and answers a current one with its protocol, version and who started it', r2?.type === 'hello' && r2.protocol === 2 && 'startedBy' in r2 && r2.minProtocol === 1, JSON.stringify(r2));
+    s.c.destroy(); b.kill('SIGTERM'); await sleep(200);
+  }
+} finally {
+  stopBrokersUnder(mroot); await sleep(200);
+  fs.rmSync(mroot, { recursive: true, force: true });
+}
+
 fs.rmSync(tmp, { recursive: true, force: true });
 
 console.log(fail ? `\n== broker tests: ${fail} FAILED, ${pass} passed ==` : `\n== broker tests: ${pass} passed ==`);

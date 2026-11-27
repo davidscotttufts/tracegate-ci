@@ -28,6 +28,16 @@
 //       the preemptible job's own script used to apply by itself ("yield to any
 //       gate"), so retiring that script-side check loses nothing. An observed job
 //       still never sheds, waits for or preempts work that is not preemptible.
+//   I12 on-demand (protocol 2): a job someone asked for NOW (`lease --on-demand`, for a
+//       deploy a person requested) is ordered ahead of every queued job that is
+//       not itself on-demand, whatever its class. While it lives, queued or
+//       running, preemptible work is asked to yield at once (no priority gap) and
+//       none starts. It never preempts work that is not preemptible: a running
+//       gate keeps running, and the on-demand job takes the reservation behind it.
+//       A preemptible job cannot be on-demand (the server refuses it).
+//   Several ledgers share one broker (machine scope): each job carries its
+//   `ledger` and `repo`, and what is learned (durations, memory) is keyed by
+//   (class, label, ledger), so one repo's history never sizes another's job.
 
 export const PREEMPT_GAP = 10;
 
@@ -57,7 +67,10 @@ export function initialState({ capacity, classes = DEFAULT_CLASSES, defaultToken
   };
 }
 
-export const durationKey = (cls, label) => `${cls}\u0000${label ?? ''}`;
+// Learned state is per (class, label, ledger): a shared broker must not let one repo's
+// "gate main" set another's estimate. A job with no ledger (an older client, or one
+// outside a repo) keys as before, so an old log replays to the same estimates.
+export const durationKey = (cls, label, ledger) => `${cls}\u0000${label ?? ''}${ledger ? `\u0000${ledger}` : ''}`;
 
 /** Apply one event. Mutates and returns `st`. Events carry their own `seq` and `at` (ms). */
 export function apply(st, ev) {
@@ -69,6 +82,7 @@ export function apply(st, ev) {
       st.jobNo = Math.max(st.jobNo, Number(String(ev.id).replace(/^j/, '')) || 0);
       st.jobs.set(ev.id, {
         id: ev.id, owner: ev.owner ?? null, class: ev.class, label: ev.label ?? '', tokens: ev.tokens ?? 1,
+        ledger: ev.ledger ?? null, repo: ev.repo ?? null, onDemand: !!ev.onDemand && !(ev.preemptible ?? cls.preemptible),
         exclusive: !!ev.exclusive, est: ev.est ?? null, parent: ev.parent ?? null, deadline: ev.deadline ?? null,
         minTokens: Number.isInteger(ev.minTokens) && ev.minTokens > 0 ? ev.minTokens : null, observe: !!ev.observe, wouldWait: null, yieldOthers: !!ev.observe && !!ev.yieldOthers,
         memPerToken: Number.isFinite(ev.memPerToken) && ev.memPerToken > 0 ? ev.memPerToken : null, reservedMB: 0, contended: false,
@@ -94,7 +108,7 @@ export function apply(st, ev) {
     case 'release': case 'cancel': case 'expire': {
       if (!j) break;
       if (ev.type === 'release' && j.state === 'running' && !j.nested && ev.reason === 'done') {
-        const k = durationKey(j.class, j.label);
+        const k = durationKey(j.class, j.label, j.ledger);
         const d = st.durations.get(k) ?? [];
         d.push(Math.max(0, (ev.at - j.grantedAt) / 1000));
         st.durations.set(k, d.slice(-KEEP_DURATIONS));
@@ -102,7 +116,7 @@ export function apply(st, ev) {
       // What the job's process tree used at its peak, per token it was granted:
       // the next run of the same (class, label) reserves that much (I9).
       if (ev.type === 'release' && j.state === 'running' && !j.nested && Number.isFinite(ev.peakMB) && ev.peakMB > 0 && j.granted > 0) {
-        const k = durationKey(j.class, j.label);
+        const k = durationKey(j.class, j.label, j.ledger);
         const m = st.memory.get(k) ?? [];
         m.push(ev.peakMB / j.granted);
         st.memory.set(k, m.slice(-KEEP_MEMORY));
@@ -126,7 +140,7 @@ export function apply(st, ev) {
 /** p90 of recorded durations (seconds) for this job's (class, label), or null. */
 export function estimateOf(st, job) {
   if (Number.isFinite(job.est) && job.est > 0) return job.est;
-  const d = st.durations.get(durationKey(job.class, job.label));
+  const d = st.durations.get(durationKey(job.class, job.label, job.ledger));
   if (!d || d.length < 3) return null;
   const s = [...d].sort((a, b) => a - b);
   return s[Math.min(s.length - 1, Math.ceil(0.9 * s.length) - 1)];
@@ -137,11 +151,18 @@ const p90 = (d) => { const s = [...d].sort((a, b) => a - b); return s[Math.min(s
 /** MB one token of this job is expected to use: declared, else p90 of its history, else the default. Pure. */
 export function memPerTokenOf(st, job) {
   if (Number.isFinite(job.memPerToken) && job.memPerToken > 0) return job.memPerToken;
-  const m = st.memory.get(durationKey(job.class, job.label));
+  const m = st.memory.get(durationKey(job.class, job.label, job.ledger));
   return m && m.length >= 2 ? Math.ceil(p90(m)) : st.defaultTokenMB;
 }
 
-const order = (a, b) => (b.priority - a.priority) || (a.rank - b.rank) || (a.enqueueSeq - b.enqueueSeq);
+// I12: on-demand first, then priority, advisor rank, arrival.
+const order = (a, b) => (Number(b.onDemand) - Number(a.onDemand)) || (b.priority - a.priority) || (a.rank - b.rank) || (a.enqueueSeq - b.enqueueSeq);
+
+// I11/I12: the jobs that hold preemptible work off while they live, highest first.
+const floorsOf = (st) => [...st.jobs.values()].filter((x) => (x.yieldOthers || x.onDemand) && !x.nested)
+  .sort((a, b) => (Number(b.onDemand) - Number(a.onDemand)) || (b.priority - a.priority));
+// Is preemptible job `j` held by floor `f`? An on-demand floor holds every preemptible job.
+const holds = (f, j) => !j.observe && j.preemptible && !j.onDemand && j.id !== f.id && (f.onDemand || j.priority <= f.priority - PREEMPT_GAP);
 
 export function queueOf(st) { return [...st.jobs.values()].filter((j) => j.state === 'queued').sort(order); }
 export function runningOf(st) { return [...st.jobs.values()].filter((j) => j.state === 'running'); }
@@ -186,14 +207,15 @@ export function schedule(st, now) {
     }
   }
   const ourWorkRunning = running.length > 0;
-  // I11: the highest observed job that asks preemptible work to yield, queued or running.
-  const floor = [...st.jobs.values()].filter((x) => x.yieldOthers && !x.nested).sort((a, b) => b.priority - a.priority)[0] ?? null;
-  const held = (j) => !!floor && !j.observe && j.preemptible && j.priority <= floor.priority - PREEMPT_GAP;
-  if (floor) for (const r of real) if (held(r) && !r.preemptRequested && !out.preempts.some((p) => p.id === r.id)) out.preempts.push({ id: r.id, by: floor.id });
+  // I11: an observed job that asks preemptible work to yield; I12: an on-demand job. Queued or running.
+  const floors = floorsOf(st);
+  const holderOf = (j) => floors.find((f) => holds(f, j)) ?? null;
+  const held = (j) => !!holderOf(j);
+  for (const r of real) { const f = holderOf(r); if (f && !r.preemptRequested && !out.preempts.some((p) => p.id === r.id)) out.preempts.push({ id: r.id, by: f.id }); }
 
   for (const j of queueOf(st)) {
     if (j.deadline !== null && now >= j.deadline) { out.expires.push(j.id); continue; }
-    if (held(j)) continue; // I11: waits, without a reservation, until the observed job ends
+    if (held(j)) continue; // I11/I12: waits, without a reservation, until the floor job ends
     // I2: a request made from inside a running lease runs inside it, at once.
     const parent = j.parent ? st.jobs.get(j.parent) : null;
     if (parent && parent.state === 'running') {
@@ -245,7 +267,7 @@ export function schedule(st, now) {
     if (res) continue; // EASY: only the first blocked job holds a reservation
     // I6: free room by preempting cheap work, lowest priority first, newest first.
     const victims = running
-      .filter((r) => r.preemptible && r.priority <= j.priority - PREEMPT_GAP)
+      .filter((r) => r.preemptible && (j.onDemand || r.priority <= j.priority - PREEMPT_GAP))
       .sort((a, b) => (a.priority - b.priority) || (b.grantedAt - a.grantedAt));
     const pending = running.filter((r) => r.preemptRequested);
     const keep = running.filter((r) => !victims.includes(r));
@@ -286,19 +308,20 @@ export function explain(st, id, now) {
   }
   const q = queueOf(st);
   const pos = q.findIndex((x) => x.id === id);
-  const yielder = [...st.jobs.values()].filter((x) => x.yieldOthers && !x.nested).sort((a, b) => b.priority - a.priority)[0];
-  if (yielder && j.preemptible && !j.observe && j.priority <= yielder.priority - PREEMPT_GAP) {
-    return { id, state: 'queued', position: pos + 1, of: q.length, ahead: [], blockers: [{ id: yielder.id, class: yielder.class, label: yielder.label, tokens: yielder.granted }], reservation: null,
-      text: `held: preemptible work yields while ${yielder.id} (${yielder.class}${yielder.label ? ` ${yielder.label}` : ''}) runs, and starts when it ends` };
+  const yielder = floorsOf(st).find((f) => holds(f, j));
+  if (yielder) {
+    return { id, state: 'queued', position: pos + 1, of: q.length, ahead: [], blockers: [{ id: yielder.id, class: yielder.class, label: yielder.label, repo: yielder.repo, tokens: yielder.granted }], reservation: null,
+      text: `held: preemptible work yields while ${yielder.id} (${yielder.class}${yielder.label ? ` ${yielder.label}` : ''}${yielder.repo ? ` [${yielder.repo}]` : ''}${yielder.onDemand ? ', on demand' : ''}) ${yielder.state === 'running' ? 'runs' : 'waits'}, and starts when it ends` };
   }
   const s = schedule(st, now);
-  const blockers = runningOf(st).filter((r) => !r.nested).map((r) => ({ id: r.id, class: r.class, label: r.label, tokens: r.granted }));
-  const ahead = q.slice(0, pos).map((x) => ({ id: x.id, class: x.class, label: x.label, priority: x.priority }));
+  const blockers = runningOf(st).filter((r) => !r.nested).map((r) => ({ id: r.id, class: r.class, label: r.label, repo: r.repo, tokens: r.granted }));
+  const ahead = q.slice(0, pos).map((x) => ({ id: x.id, class: x.class, label: x.label, repo: x.repo, priority: x.priority, onDemand: x.onDemand }));
   const res = s.reservation;
   const eta = res && res.id === id ? (Number.isFinite(res.at) ? new Date(res.at).toISOString() : 'unknown (a running job has no duration estimate)') : null;
   const parts = [`queued at position ${pos + 1} of ${q.length}`];
-  if (ahead.length) parts.push(`behind ${ahead.map((a) => `${a.id} (${a.class}${a.label ? ` ${a.label}` : ''})`).join(', ')}`);
-  if (blockers.length) parts.push(`capacity ${cpuCap(st)} is held by ${blockers.map((b) => `${b.id} (${b.class}, ${b.tokens})`).join(', ')}`);
+  const from = (x) => (x.repo ? ` [${x.repo}]` : '');
+  if (ahead.length) parts.push(`behind ${ahead.map((a) => `${a.id} (${a.class}${a.label ? ` ${a.label}` : ''}${a.onDemand ? ', on demand' : ''})${from(a)}`).join(', ')}`);
+  if (blockers.length) parts.push(`capacity ${cpuCap(st)} is held by ${blockers.map((b) => `${b.id} (${b.class}, ${b.tokens})${from(b)}`).join(', ')}`);
   if (st.limit.cpu < st.capacity || Number.isFinite(st.limit.memMB)) {
     const mem = Number.isFinite(st.limit.memMB) ? `, memory budget ${Math.round(st.limit.memMB)} MB (this job needs ~${memPerTokenOf(st, j)} MB per token)` : '';
     parts.push(`the machine allows ${cpuCap(st)} of ${st.capacity} token(s) now${mem}${st.limit.why?.length ? ` — ${st.limit.why.join('; ')}` : ''}`);
@@ -311,7 +334,7 @@ export function explain(st, id, now) {
 /** A JSON-safe snapshot for status output. Pure. */
 export function snapshot(st, now) {
   const s = schedule(st, now);
-  const view = (j) => ({ id: j.id, class: j.class, label: j.label, priority: j.priority, tokens: j.state === 'running' ? j.granted : j.tokens,
+  const view = (j) => ({ id: j.id, class: j.class, label: j.label, repo: j.repo, ledger: j.ledger, onDemand: j.onDemand, priority: j.priority, tokens: j.state === 'running' ? j.granted : j.tokens,
     exclusive: j.exclusive, preemptible: j.preemptible, state: j.state, fence: j.fence, nested: j.nested, parent: j.parent,
     minTokens: j.minTokens, memMB: j.state === 'running' ? j.reservedMB : null, memPerToken: memPerTokenOf(st, j), contended: j.contended,
     observe: j.observe, wouldWait: j.wouldWait, yieldOthers: j.yieldOthers,

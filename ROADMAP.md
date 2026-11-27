@@ -28,6 +28,14 @@ bus. It runs in the private monorepo it came from, whose numbers are published i
 
 ## Later
 
+- **Recurring night windows for deploys.** The broker can now run a deploy a person asked
+  for at once (`lease --on-demand`). The next phase is the other half of the rule: a
+  recurring window (for example 01:00–05:00 local) in which deploys that nobody asked for
+  run, so they never land on someone's gate during the day. The window is a property of
+  the class (`"classes": {"deploy": {"window": "1-5"}}`), held as state in the broker like a
+  reservation, with on-demand leases exempt. Merges and deploys themselves stay in each
+  repo's scripts.
+
 - **Partitioned trains.** Gate branches whose tests don't overlap in separate queues. This
   waits until the Conductor has measured how often "independent" branches fail only
   together.

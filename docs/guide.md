@@ -263,6 +263,8 @@ tracegate queue            # who holds what, and who waits
 tracegate explain j42      # why j42 waits, and when it starts
 ```
 
+- There is one broker per machine (and user), shared by every repo on it. A daemon in one
+  repo yields to a gate in another. `tracegate queue` shows which repo each job is from.
 - The first `lease` starts the broker. It stops after 30 idle minutes.
 - The command gets `TRACEGATE_TOKENS` and `VITEST_MAX_WORKERS` set to its grant, and
   `TRACEGATE_CONTENDED=1` if it started on a busy machine.
@@ -279,6 +281,36 @@ tracegate explain j42      # why j42 waits, and when it starts
 ```json
 { "broker": { "capacity": 8, "idleMinutes": 30, "classes": { "adhoc": { "priority": 35 } } } }
 ```
+
+### One broker for the machine
+
+- The broker's state is `$HOME/.tracegate/broker/<host>/`, and its socket is in the temp
+  directory, named by your user id and the host.
+- Each job carries its repo's ledger. Durations and memory are learned per repo, so two
+  repos' `gate main` don't share an estimate.
+- **One capacity per host.** The first broker to start uses its repo's config (capacity,
+  classes, adaptive, advisor) until it exits. A repo whose config gives a different
+  capacity gets a warning naming the repo that started it. Put the same `broker` block,
+  or a `"hosts"` entry, in every repo you use on one machine.
+- `TRACEGATE_BROKER_SCOPE=ledger`, or `"broker": { "scope": "ledger" }`, gives a repo a
+  broker of its own, as in 0.10.x. It then sees only its own ledger's work, and both
+  brokers hand out the whole machine. `TRACEGATE_BROKER_DIR` and `TRACEGATE_BROKER_SOCKET`
+  still pick a broker explicitly.
+- **Mixed versions.** Clients and brokers shake hands on a protocol number. A plain lease
+  runs on an older broker, with a warning. `--on-demand` on an older broker exits 76
+  without running the command. No client ever starts a second broker beside a live one.
+  A repo still on 0.10.x keeps its own per-ledger broker until it upgrades.
+
+### On demand
+
+```sh
+tracegate lease --class deploy --on-demand -- ./deploy.sh    # a deploy someone asked for, now
+```
+
+An on-demand lease goes ahead of every queued job. Preemptible work (the daemon) stops at
+once and doesn't start again until it ends. It never stops a running gate: it waits for
+the gate to release, then starts first. When deploys are allowed to run is up to your own
+scripts.
 
 ### Adaptive capacity
 
@@ -383,12 +415,12 @@ when there is none by that name, a remote-tracking one: use `"origin/main"` in a
 whose local `main` isn't kept current.
 
 A `TRACEGATE_CONFIG` inside the repository is read from the worktree, at the piece's commit.
-`install` writes `TRACEGATE_CONFIG`, `TRACEGATE_LEDGER`, `TRACEGATE_BROKER_DIR` and
-`TRACEGATE_BROKER_SOCKET`, as set when you run it, into the launchd or systemd unit, because
-the scheduler starts ticks with no environment of its own. Each config gets its own unit.
-A second ledger on the same machine has its own broker, so its pieces don't yield to gates
-that use the first one. To share the gates' broker, set `TRACEGATE_BROKER_DIR` to its
-directory (`<their ledger>/broker/<host>`) before `install`.
+`install` writes `TRACEGATE_CONFIG`, `TRACEGATE_LEDGER`, `TRACEGATE_BROKER_DIR`,
+`TRACEGATE_BROKER_SOCKET`, `TRACEGATE_BROKER_SCOPE` and `TMPDIR`, as set when you run it,
+into the launchd or systemd unit, because the scheduler starts ticks with no environment of
+its own. Each config gets its own unit. Every repo on the machine shares one broker, so a
+piece yields to any repo's gate. With `TRACEGATE_BROKER_SCOPE=ledger` it yields only to
+gates on its own ledger.
 
 ## Release bus
 
