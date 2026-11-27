@@ -35,6 +35,7 @@ export function spawn(ln, args, env) {
 }
 
 export const recordArgs = (run) => ['--json', `--outputFile=${path.join(run, 'results.json')}`];
+export const resultsArgs = recordArgs;
 export const filesArgs = (files) => (files.length ? ['--runTestsByPath', ...files] : []);
 export const workersArg = (n) => `--maxWorkers=${n}`;
 export const hasWorkersArg = (args) => args.some((a) => a.startsWith('--maxWorkers') || a === '-w' || a.startsWith('-w='));

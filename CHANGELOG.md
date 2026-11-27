@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+Added (the per-PR bar as one command):
+- `tracegate pr [--base <ref>] [--head <ref>] [--post-status] [--repo <owner/name>]
+  [--sha <sha>]`. For `base...head` (default: the merge-base with `origin/main`, or
+  `pr.base`, and HEAD), lane by lane, it runs the branch's added and changed test files,
+  the must-run set Tracegate selects at the tree, and the files matching the new
+  `pr.alwaysRun` globs, then the commands in `pr.commands`. It prints a verdict with counts
+  and exits 0 green, 1 red. `--dry-run` prints the plan and why each file is in it.
+- `--post-status` posts a GitHub commit status, context `local/pr-bar`, on the exact head
+  sha: `success` with the counts, or `failure` naming the first failing item. It refuses
+  (exit 3) on a dirty tree or when `--head`/`--sha` is not the checked-out HEAD, and posts
+  nothing if HEAD or the tree moved during the run. A green bar it could not post exits 4.
+- The bar runs under one broker lease of a new class, `pr` (priority 40: below gates and
+  trains, above ad hoc work). An older broker treats it as `adhoc`. It records no
+  footprints and never counts toward the entry bar.
+- Runner adapters gain `resultsArgs(run)`: per-file verdicts without recording.
+
 Changed (one broker per machine, not per repo):
 - The broker used to be keyed by its ledger: `<ledger>/broker/<host>/`, and a socket named
   by a hash of that directory. Every repo that vendors Tracegate has its own ledger, so each

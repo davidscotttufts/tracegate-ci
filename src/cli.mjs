@@ -16,6 +16,13 @@ const USAGE = `usage: tracegate <command> [options]
                                        --canary records one test file to check the seam
   run     --lane <l> [--mode m] [--run <dir>] [--audit r] -- <vitest args>
                                        select → vitest (recorded) → report → ingest
+  pr      [--base <ref>] [--head <ref>] [--post-status] [--repo <owner/name>] [--sha <sha>]
+          [--dry-run] [--json] [--fail-fast] [--tokens n] [--no-lease]
+                                       the per-PR bar for base...head: the PR's changed tests,
+                                       the must-run set and "pr.alwaysRun", then "pr.commands";
+                                       --post-status sets the GitHub status local/pr-bar on
+                                       HEAD (clean tree only). Exit 0 green, 1 red, 3 refused,
+                                       4 green but not posted
   mode    --lane <l>                   print the effective mode (off|shadow|enforce)
   select  --lane <l> --run <dir> [--mode m] [--audit r]
                                        write <dir>/selected.txt and <dir>/predict.json
@@ -170,6 +177,7 @@ try {
   else if (cmd === 'daemon') process.exitCode = (await import('./daemon.mjs')).daemon(process.argv[3], o);
   else if (cmd === 'conductor') (await import('./conductor.mjs')).conductor(process.argv[3], o);
   else if (cmd === 'run') process.exitCode = runLane(o, rest);
+  else if (cmd === 'pr') process.exitCode = (await import('./pr.mjs')).prCli(o, process.argv.slice(3));
   else if (cmd === 'role') { const n = process.argv[4] && !process.argv[4].startsWith('--') ? process.argv[4] : undefined; process.exitCode = await (await import('./role/index.mjs')).roleCli(process.argv[3], n, o); }
   else if (cmd === 'lease') process.exitCode = await (await import('./broker/client.mjs')).lease(o, rest);
   else if (cmd === 'observe') process.exitCode = await (await import('./broker/client.mjs')).observe(o);

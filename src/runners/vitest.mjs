@@ -41,6 +41,8 @@ export function spawn(ln, args, env) {
 }
 
 export const recordArgs = (run) => ['--reporter=default', '--reporter=json', `--outputFile.json=${path.join(run, 'results.json')}`, `--reporter=${REPORTER}`];
+// Verdicts only, for a run that records nothing (`tracegate pr`).
+export const resultsArgs = (run) => ['--reporter=default', '--reporter=json', `--outputFile.json=${path.join(run, 'results.json')}`];
 export const filesArgs = (files) => files;
 export const workersArg = (n) => `--maxWorkers=${n}`;
 export const hasWorkersArg = (args) => args.some((a) => a.startsWith('--maxWorkers'));
