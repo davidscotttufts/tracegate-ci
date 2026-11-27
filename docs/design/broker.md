@@ -82,8 +82,9 @@ The full citations are in the research notes behind ROADMAP §1. In short:
 
 ## 4. Decision
 
-A single **broker** process per ledger (one per clone, shared by every worktree),
-reached through a unix socket. It owns the machine's capacity as **N tokens**. Every
+A single **broker** process per machine and user, shared by every repo and worktree on
+it, reached through a unix socket. (Until 0.10.x it was one per ledger; see §10 for why
+that changed.) It owns the machine's capacity as **N tokens**. Every
 heavy job asks the broker for a lease, in any language, through a one-line wrapper:
 
 ```
@@ -102,6 +103,7 @@ tracegate lease --class gate --tokens 4 --est 900 --label "gate main@abc123" -- 
 | I6 | **Preempt only preemptible work, across a priority gap of ≥ 10.** Lowest priority first; a running gate is never preempted | F1 (the daemon yields by rule, not by `pgrep`) |
 | I7 | **Fencing.** Every grant carries a strictly increasing fence token (`TRACEGATE_FENCE`), so a writer can refuse stale authority | F7, and future ledger writes |
 | I8 | **Event-sourced and deterministic.** All state is a pure function of an append-only JSONL event log. The scheduler is a pure function of (state, now). Replaying the log reproduces every decision | Audit, debugging, the "never delete evidence" rule |
+| I12 | **On demand.** A lease marked `--on-demand` (work a person asked for now, such as a deploy) is ordered ahead of every queued job that is not on demand. While it lives, preemptible work yields at once, with no priority gap, and none starts. It never preempts work that is not preemptible. A preemptible class cannot be on demand | A requested deploy waiting behind the queue |
 
 **Job classes** (defaults; the config can override them):
 
@@ -130,6 +132,25 @@ to the child's process group and exits 75 (`EX_TEMPFAIL`). `--requeue` asks agai
 
 Newline-delimited JSON over a unix socket. Requests:
 - `hello`, `request`, `release`, `cancel`, `status`, `explain`, `history`.
+
+**Handshake (protocol 2).** A client's first message is `hello` with `protocol`, its
+`version`, `ledger`, `repo` and its own configured `capacity`. The broker answers with its
+`protocol`, `minProtocol`, `version`, `scope`, `capacity`, `classes` and `startedBy` (the
+repo whose config it runs). A 0.10.x broker answers with no number: it is protocol 1.
+
+| Case | What happens | Why |
+|---|---|---|
+| The broker is older, and the request needs nothing new | Runs, with a warning | Protocol 2 only adds optional fields; an old broker serves a plain lease correctly |
+| The broker is older, and the request needs protocol 2 (`--on-demand`) | Exit **76** (`EX_PROTOCOL`); the command does not run | The old broker would drop the flag, and the deploy would wait in the queue while its caller believes otherwise |
+| The client is below the broker's `minProtocol` | The broker answers `error` with `code: "protocol"`; exit 76 | The broker decides what it can still serve |
+| No answer to `hello` in 30 s | Exit 76 | A hung broker is still a live one |
+
+A client never starts a broker while one answers on the socket, and a broker that finds a
+live one on its socket exits. Falling back to a per-ledger broker on a mismatch was
+rejected: two brokers would each hand out the whole machine, which is the failure §10
+exists to remove, and the warning would scroll past in a daemon log. A refusal is loud, has
+its own exit code, and names the fix (`tracegate broker stop`, or
+`TRACEGATE_BROKER_SCOPE=ledger` on purpose).
 
 Pushes from the broker:
 - `granted`, `queued`, `preempt`, `expired`.
@@ -195,6 +216,8 @@ is granted the widest width in `[minTokens, need]` that fits.
 | `observe` (I10): register work coordinated elsewhere, never waiting | 0.4.0 | The way to adopt the broker beside existing locks. |
 | `observe --yield` (I11): an observed gate holds off preemptible work | 0.5.0 | |
 | `lease --jobserver` | 0.5.0 | Tested through a real lease; not yet measured on a mixed workload with make ≥ 4.4. |
+| One broker per machine (§10), the protocol handshake (§5.2), `lease --on-demand` (I12) | after 0.10.6 | Each sabotage-witnessed in `test/broker.mjs`. |
+| Recurring night windows for deploys | — | The next phase (ROADMAP). On-demand leases will be exempt. |
 | Footprint-partitioned trains | — | Waits for the Conductor's false-independence rate. |
 
 Retiring the source project's eight mechanisms is that project's decision, one at a time,
@@ -255,8 +278,9 @@ fit. The load average is only a fallback when there is no second reading.
   - Swap thresholds are in MB/s, so 16 KB and 4 KB pages read alike.
 - **`"capacity"` may be a share** such as `"75%"`.
 - **`"hosts": { "<host>": {…} }`** overrides any of it for one machine.
-- **The broker's state is per host** (`<ledger>/broker/<host>/`), because what it learns
-  (durations, memory per token) is a property of one machine, and a ledger may sit on
+- **The broker's state is per host** (`$HOME/.tracegate/broker/<host>/`, or
+  `<ledger>/broker/<host>/` with scope `ledger`), because what it learns (durations, memory
+  per token) is a property of one machine, and a home directory or a ledger may sit on
   storage several machines share.
 - **The broker logs the hardware profile** (cores, performance cores, RAM, arch,
   container limits) in its start-up `capacity` event.
@@ -312,3 +336,51 @@ before trusting it.
       mixed-workload measurement is still open (see §7).
 - [ ] **Batch re-sizing.** A lane split into batches could be re-leased between batches
       and so follow the budget during a run, not just at its start.
+
+## 10. One broker per machine
+
+**The problem (MEASURED 2026-11-27).** The broker was keyed by its ledger: state in
+`<ledger>/broker/<host>/`, a socket named by a hash of that directory. Each repo that
+vendors Tracegate has its own ledger, so each ran its own broker, and each handed out the
+whole machine. On one Mac, one repo's background daemon could not see another repo's gate,
+started test batches beside other repos' gates 11 times in one day, and memory ran out.
+I1 ("one queue") held per repo and failed for the machine, which is what it is for.
+
+**The decision.** Scope `machine` is the default.
+
+| | Machine scope (default) | Ledger scope (opt-out) |
+|---|---|---|
+| State | `$HOME/.tracegate/broker/<host>/` | `<ledger>/broker/<host>/` |
+| Socket | `$TMPDIR/tracegate-m<uid>-<hash(host, uid, dir)>.sock` | `$TMPDIR/tracegate-<hash(dir)>.sock`, byte for byte as before |
+| Sees | every repo of this user on this host | its own ledger |
+| Set by | default | `TRACEGATE_BROKER_SCOPE=ledger` or `"broker": {"scope": "ledger"}` |
+
+`TRACEGATE_BROKER_DIR` and `TRACEGATE_BROKER_SOCKET` still win over either scope. A socket
+owned by another user is refused. The socket stays in the temp directory because of the
+~104-byte limit on macOS; `daemon install` carries `TMPDIR` so a scheduled tick finds the
+same socket as a shell.
+
+**What stays per ledger.** Every `enqueue` carries the client's `ledger` and `repo`.
+Durations and memory are keyed by `(class, label, ledger)`: two repos' `gate main` are
+different jobs with different histories. A job with no ledger (an older client, or one
+outside a repo) keys as `(class, label)`, as before, so an old log replays to the same
+estimates (I8). `status`, `explain` and `tracegate queue` show the repo.
+
+**One capacity per host.** Capacity, classes, adaptive policy and the advisor come from
+the config of the repo whose client started the broker, and stay until it exits. The
+alternatives:
+
+| Option | Against | Verdict |
+|---|---|---|
+| The smallest capacity any client asks for | A client's config could shrink the machine for everyone, mid-run | Rejected |
+| Re-read on every hello | The capacity would follow whichever repo spoke last; replay would need the configs | Rejected |
+| **First to start wins, a mismatch warns** | Depends on start order | **Chosen**: the start-up `capacity` event records `startedBy`, so it is visible and replayable. Commit the same `broker` block (or a `"hosts"` entry) in each repo |
+
+**Version skew.** Covered by the handshake (§5.2). A repo still on 0.10.x computes the old
+socket name, so it keeps its own broker: no worse than before, and it joins once upgraded.
+
+**Not done (open).**
+- [ ] A repo that opts out (scope `ledger`) and one that does not still overcommit the
+      machine between them. The machine broker could `observe` a ledger broker's jobs.
+- [ ] Two users on one host each get a broker. Sharing across users would need a socket
+      outside the per-user temp directory and a permission model.

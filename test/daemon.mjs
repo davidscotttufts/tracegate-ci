@@ -143,6 +143,8 @@ check('window: a malformed window is never open', !D.inWindow('nights', 3));
   const linE = D.unitFiles({ home, platform: 'linux', env: env0 });
   check('install (Linux): ...and into the service', Object.entries(env0).every(([k, v]) => linE.files[0].text.includes(`Environment="${k}=${v}"`)), linE.files[0].text);
   check('install: a second config is a unit of its own; with none, the name is unchanged', macE.name !== mac.name && D.unitFiles({ home, platform: 'darwin', env: { TRACEGATE_LEDGER: env0.TRACEGATE_LEDGER } }).name === mac.name);
+  const ce = D.carriedEnv({ TRACEGATE_BROKER_SCOPE: 'ledger', TMPDIR: '/x/t' });
+  check('install: the broker scope and TMPDIR (where the machine broker\'s socket is) are carried', ce.TRACEGATE_BROKER_SCOPE === 'ledger' && ce.TMPDIR === '/x/t' && !D.carriedEnv({ TMPDIR: '/x/t', TRACEGATE_BROKER_SOCKET: '/s.sock' }).TMPDIR, JSON.stringify(ce));
   const cli = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', 'src', 'cli.mjs');
   const env = { ...process.env, HOME: home };
   execFileSync(process.execPath, [cli, 'daemon', 'install', '--no-load', '--home', home], { env, stdio: 'ignore' });

@@ -6,26 +6,77 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { brokerDir, socketPath } from './paths.mjs';
+import { brokerConfig, brokerDir, EX_PROTOCOL, ledgerIdentity, packageVersion, PROTOCOL, socketPath } from './paths.mjs';
 
 // The broker-only entry: autostart loads nothing but the broker (see main.mjs).
 const MAIN = path.join(path.dirname(fileURLToPath(import.meta.url)), 'main.mjs');
 export const EX_TEMPFAIL = 75; // preempted: try again later
+export { EX_PROTOCOL }; // the broker on the socket cannot serve this client (76)
 
-/** Connect, starting a broker in the background if none answers. */
-export async function connect({ autostart = true, timeoutMs = 8000 } = {}) {
+/** The broker on the socket cannot serve this client. Nothing is started beside it. */
+export class BrokerProtocolError extends Error {
+  constructor(message) { super(message); this.code = 'EBROKERPROTO'; this.exitCode = EX_PROTOCOL; }
+}
+
+const warned = new Set();
+const warnOnce = (key, text) => { if (warned.has(key)) return; warned.add(key); process.stderr.write(`tracegate broker: ${text}\n`); };
+
+/**
+ * Connect, starting a broker in the background if none answers, then shake hands.
+ * `need` is the lowest broker protocol this caller can use (2 for --on-demand): an
+ * older broker on the socket is refused with BrokerProtocolError, never replaced and
+ * never run beside. `hello` adds fields to the handshake (owner, pid).
+ */
+export async function connect({ autostart = true, timeoutMs = 8000, need = 1, hello = {} } = {}) {
   const sock = socketPath();
+  // The socket sits in a temp dir: never talk to one another user put there.
+  if (typeof process.getuid === 'function') {
+    let st = null; try { st = fs.lstatSync(sock); } catch { /* none yet */ }
+    if (st && st.uid !== process.getuid()) throw new Error(`refusing the broker socket ${sock}: it belongs to uid ${st.uid}, not to you (${process.getuid()})`);
+  }
   const tryOnce = () => new Promise((resolve, reject) => {
     const s = net.connect(sock);
     s.once('connect', () => resolve(s));
     s.once('error', reject);
   });
-  try { return wrap(await tryOnce()); } catch (e) {
+  let c = null;
+  try { c = wrap(await tryOnce()); } catch (e) {
     if (!autostart || !['ENOENT', 'ECONNREFUSED'].includes(e.code)) throw e;
   }
+  if (!c) c = await start(sock, timeoutMs, tryOnce);
+  try { await handshake(c, sock, need, hello); } catch (e) { c.close(); throw e; }
+  return c;
+}
+
+async function handshake(c, sock, need, extra) {
+  const me = ledgerIdentity();
+  let mine = null; try { mine = brokerConfig(); } catch { /* not in a repo, or a bad scope: no comparison */ }
+  const ref = `hello-${process.pid}-${Date.now()}`;
+  const reply = await new Promise((resolve) => {
+    const t = setTimeout(() => { off(); resolve(null); }, 30_000); // generous: a broker on a swapping machine answers slowly
+    // A 0.10.x broker answers hello without a ref; anything newer echoes it.
+    const off = c.on((m) => {
+      if ((m.type === 'hello' && (m.ref === ref || m.ref === undefined)) || (m.type === 'error' && m.ref === ref)) { clearTimeout(t); off(); resolve(m); }
+    });
+    c.send({ op: 'hello', ref, protocol: PROTOCOL, version: packageVersion(), ...me, ...(mine ? { capacity: mine.capacity } : {}), ...extra });
+  });
+  if (!reply) throw new BrokerProtocolError(`the broker on ${sock} did not answer the handshake within 30 s; nothing was started beside it (stop it with \`tracegate broker stop\`, or kill the pid in ${path.join(brokerDir(), 'broker.pid')})`);
+  if (reply.type === 'error') throw new BrokerProtocolError(`${reply.error}. Upgrade this repo's tracegate-ci, or run a broker of its own with TRACEGATE_BROKER_SCOPE=ledger`);
+  const theirs = Number.isInteger(reply.protocol) ? reply.protocol : 1;
+  const who = `the broker on ${sock} (pid ${reply.pid ?? '?'}, tracegate-ci ${reply.version ?? (theirs === 1 ? '0.10.x or older' : '?')}, protocol ${theirs}${reply.startedBy?.repo ? `, started by ${reply.startedBy.repo}` : ''})`;
+  if (theirs < need) throw new BrokerProtocolError(`${who} cannot honour this request: it needs protocol ${need} or later, and an older broker would silently ignore what it adds. Nothing was started beside it. Stop it once its jobs end (\`tracegate broker stop\`) so the next lease starts a current one`);
+  if (theirs < PROTOCOL) warnOnce(`old:${sock}`, `${who} is older than this client (protocol ${PROTOCOL}); it does not record which repo a job came from, or serve --on-demand. Stop it once its jobs end to start a current one`);
+  if (mine && Number.isInteger(reply.capacity) && reply.capacity !== mine.capacity && reply.startedBy?.ledger !== me.ledger) {
+    warnOnce(`cap:${sock}`, `${who} hands out ${reply.capacity} token(s); this repo's config gives ${mine.capacity}. One broker serves the whole machine, and the config of the repo that started it wins until it exits${reply.startedBy?.config ? ` (${reply.startedBy.config})` : ''}`);
+  }
+  c.broker = reply;
+}
+
+async function start(sock, timeoutMs, tryOnce) {
   const dir = brokerDir();
   fs.mkdirSync(dir, { recursive: true });
   const out = fs.openSync(path.join(dir, 'broker.log'), 'a');
+  // Another client may have started one meanwhile: the duplicate exits (server.mjs listen).
   const child = spawn(process.execPath, [MAIN, 'serve'], { detached: true, stdio: ['ignore', out, out], env: process.env });
   child.unref();
   const until = Date.now() + timeoutMs;
@@ -105,7 +156,12 @@ export function makeJobserver(tokens) {
 
 /**
  * `tracegate lease [--class c] [--tokens n] [--min-tokens m] [--mem-per-token MB]
- *                  [--exclusive] [--est s] [--label l] [--deadline-min m] [--requeue] -- <command…>`
+ *                  [--exclusive] [--est s] [--label l] [--deadline-min m] [--requeue]
+ *                  [--on-demand] -- <command…>`
+ * `--on-demand` (I12) is for work a person asked for now, such as a deploy: it goes
+ * ahead of every queued job and preemptible work yields to it at once; it still
+ * never stops a running gate. It needs a protocol-2 broker: against an older one it
+ * exits 76 (EX_PROTOCOL) without running the command, rather than be quietly queued.
  * Waits for a grant, runs the command with TRACEGATE_LEASE / TRACEGATE_FENCE /
  * TRACEGATE_TOKENS / VITEST_MAX_WORKERS (the granted width, which under adaptive
  * capacity may be less than --tokens and no less than --min-tokens), and
@@ -127,12 +183,17 @@ export async function lease(o, argv) {
     label: o.label && o.label !== true ? o.label : argv.join(' ').slice(0, 120),
     parent: process.env.TRACEGATE_LEASE || undefined,
     deadline: o['deadline-min'] !== undefined ? Date.now() + Number(o['deadline-min']) * 60_000 : undefined,
+    ...ledgerIdentity(),
+    ...(o['on-demand'] ? { onDemand: true } : {}),
   };
   const quiet = !!o.quiet;
   const say = (m) => { if (!quiet) process.stderr.write(`tracegate lease: ${m}\n`); };
   for (;;) {
-    const c = await connect();
-    c.send({ op: 'hello', owner: `${process.pid}`, pid: process.pid });
+    let c;
+    try { c = await connect({ need: req.onDemand ? 2 : 1, hello: { owner: `${process.pid}`, pid: process.pid } }); } catch (e) {
+      if (e.code !== 'EBROKERPROTO') throw e;
+      process.stderr.write(`tracegate lease: ${e.message}\n`); return EX_PROTOCOL;
+    }
     const rc = await new Promise((resolve) => {
       let id = null; let child = null; let preempted = false; let lastSay = 0;
       c.on((m) => {
@@ -205,15 +266,14 @@ export async function observe(o) {
   const quiet = !!o.quiet;
   const say = (m) => { if (!quiet) process.stderr.write(`tracegate observe: ${m}\n`); };
   let c;
-  try { c = await connect(); } catch (e) { say(`no broker (${e.message}); nothing recorded`); return 0; }
-  c.send({ op: 'hello', owner: `observe:${pid}`, pid });
+  try { c = await connect({ hello: { owner: `observe:${pid}`, pid } }); } catch (e) { say(`no broker (${e.message}); nothing recorded`); return 0; }
   c.on((m) => {
     if (m.type === 'granted') say(`${m.id} registered with ${m.tokens} token(s)${m.memMB ? `, ${m.memMB} MB` : ''}`);
     else if (m.type === 'preempt') say(`${m.id}: the broker would have preempted this for ${m.by} (observe: not acted on)`);
     else if (m.type === 'error') say(`broker refused: ${m.error}`);
   });
   c.send({ op: 'request', observe: true, ...(o.yield ? { yield: true } : {}), class: o.class && o.class !== true ? o.class : 'adhoc', tokens: o.tokens !== undefined ? Number(o.tokens) : 1,
-    exclusive: !!o.exclusive, label: o.label && o.label !== true ? o.label : `pid ${pid}` });
+    exclusive: !!o.exclusive, label: o.label && o.label !== true ? o.label : `pid ${pid}`, ...ledgerIdentity() });
   await new Promise((resolve) => {
     const t = setInterval(() => { if (!alive()) { clearInterval(t); resolve(); } }, 2000);
     c.closed.then(() => { clearInterval(t); resolve(); });

@@ -20,10 +20,11 @@
 //     a yielded piece is.
 //   - A TRACEGATE_CONFIG inside the repository is the worktree's own copy of that file,
 //     at the piece's commit; one outside it is passed on as given.
-//   - `install` carries TRACEGATE_CONFIG, TRACEGATE_LEDGER and the broker's location into
-//     the scheduler, which starts ticks with no environment of its own. A second ledger
-//     on one machine (a package beside a fork, say) yields to the gates only on THEIR
-//     broker: set TRACEGATE_BROKER_DIR to it (the socket is keyed by that directory).
+//   - `install` carries TRACEGATE_CONFIG, TRACEGATE_LEDGER, the broker's location and scope,
+//     and TMPDIR (where the machine broker's socket is) into the scheduler, which starts
+//     ticks with no environment of its own. Since protocol 2 every repo on the machine shares
+//     one broker, so a tick yields to any repo's gate; with TRACEGATE_BROKER_SCOPE=ledger
+//     it yields only to its own ledger's.
 //   - `daemon.target` names a local branch or, failing that, a remote-tracking one
 //     ("origin/main"), for a checkout whose local main is not kept current.
 //
@@ -64,6 +65,9 @@ function tipOf(target) {
 export function carriedEnv(env = process.env) {
   const out = {};
   for (const k of ['TRACEGATE_CONFIG', 'TRACEGATE_LEDGER', 'TRACEGATE_BROKER_DIR', 'TRACEGATE_BROKER_SOCKET']) if (env[k]) out[k] = path.resolve(env[k]);
+  if (env.TRACEGATE_BROKER_SCOPE) out.TRACEGATE_BROKER_SCOPE = String(env.TRACEGATE_BROKER_SCOPE);
+  // The machine broker's socket is in the temp dir: a tick must look in the same one.
+  if (env.TMPDIR && !env.TRACEGATE_BROKER_SOCKET) out.TMPDIR = path.resolve(env.TMPDIR);
   return out;
 }
 
