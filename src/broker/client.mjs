@@ -130,6 +130,26 @@ export async function lease(o, argv) {
   };
   const quiet = !!o.quiet;
   const say = (m) => { if (!quiet) process.stderr.write(`tracegate lease: ${m}\n`); };
+  // --role (src/role/): the command runs only while THIS host holds the role, at the
+  // epoch it held when the lease was asked for. Loaded only when used, so the broker
+  // files can still be vendored on their own.
+  let role = null;
+  if (o.role && o.role !== true) {
+    const R = await import('../role/index.mjs');
+    const fence = () => {
+      const s = R.status(String(o.role));
+      if (!s.mine) throw new R.RoleError(R.EX.FENCED, `${s.role} is not held by ${s.host} (holder: ${s.record?.holder?.host ?? 'nobody'}${s.record?.holder && !s.live ? ', expired' : ''}, epoch ${s.record?.epoch ?? 0}). Claim it first: tracegate role claim ${s.role}`);
+      return s;
+    };
+    try {
+      const s = fence();
+      role = { R, name: s.role, epoch: s.record.epoch, ttlMs: Math.max(60_000, Date.parse(s.record.until) - Date.parse(s.record.renewedAt ?? s.record.since)) };
+    } catch (e) {
+      if (!(e instanceof R.RoleError)) throw e;
+      process.stderr.write(`tracegate lease: refused: ${e.message}\n`); return e.exitCode;
+    }
+    role.recheck = () => { try { R.check(role.name, { epoch: role.epoch }); return null; } catch (e) { if (e instanceof R.RoleError) return e; throw e; } };
+  }
   for (;;) {
     const c = await connect();
     c.send({ op: 'hello', owner: `${process.pid}`, pid: process.pid });
@@ -145,6 +165,9 @@ export async function lease(o, argv) {
           id = m.id;
           say(`${id} granted ${m.tokens} token(s)${m.memMB ? ` and ${m.memMB} MB` : ''}, fence ${m.fence}${m.nested ? ' (inside the parent lease)' : ''}`);
           if (m.contended) say(`${id} starts CONTENDED: the machine stayed busy past the starvation limit, so a red here is not evidence on its own`);
+          // The role may have moved while this lease waited in the queue.
+          const lost = role?.recheck();
+          if (lost) { process.stderr.write(`tracegate lease: refused at grant: ${lost.message}\n`); child = true; c.call({ op: 'release', id }).catch(() => {}).finally(() => { c.close(); resolve(lost.exitCode); }); return; }
           const contended = m.contended || process.env.TRACEGATE_CONTENDED === '1';
           // A nested lease runs inside its parent's grant: it inherits the parent's jobserver.
           const js = o.jobserver && !m.nested ? makeJobserver(m.tokens) : null;
@@ -152,8 +175,21 @@ export async function lease(o, argv) {
           child = spawn(argv[0], argv.slice(1), {
             stdio: 'inherit', detached: true,
             env: { ...process.env, TRACEGATE_LEASE: id, TRACEGATE_FENCE: String(m.fence), TRACEGATE_TOKENS: String(m.tokens), VITEST_MAX_WORKERS: String(m.tokens),
-              ...(contended ? { TRACEGATE_CONTENDED: '1' } : {}), ...(js ? js.env : {}) },
+              ...(contended ? { TRACEGATE_CONTENDED: '1' } : {}), ...(js ? js.env : {}),
+              ...(role ? { TRACEGATE_ROLE: role.name, TRACEGATE_ROLE_EPOCH: String(role.epoch) } : {}) },
           });
+          // Keep the role alive while the command runs. Losing it stops nothing: the
+          // command's own `role check --epoch` before its irreversible step fails.
+          if (role) {
+            const beat = setInterval(() => {
+              try { role.R.renew(role.name, { epoch: role.epoch, ttl: `${Math.round(role.ttlMs / 1000)}s` }); } catch (e) {
+                clearInterval(beat);
+                process.stderr.write(`\n!!! tracegate lease: ${role.name} epoch ${role.epoch} is LOST (${e.message}). The command keeps running; its next \`tracegate role check ${role.name} --epoch ${role.epoch}\` fails.\n\n`);
+              }
+            }, Math.min(5 * 60_000, Math.max(1000, Math.floor(role.ttlMs / 3))));
+            beat.unref();
+            child.on('exit', () => clearInterval(beat));
+          }
           if (js) child.on('exit', () => { const back = js.available(); if (back < m.tokens - 1) say(`${id} jobserver: ${m.tokens - 1 - back} token(s) were never returned (a child died holding them)`); js.close(); });
           const fwd = (sig) => { try { process.kill(-child.pid, sig); } catch { /* gone */ } };
           process.on('SIGINT', () => fwd('SIGINT'));

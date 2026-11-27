@@ -134,7 +134,103 @@ runs the whole lane. All settings are in the [guide](docs/guide.md#configuration
 | [Keyed inputs](docs/guide.md#keyed-inputs) | An edit to one string in a translation file re-runs only the tests that used it. |
 | [Daemon](docs/guide.md#daemon) | Uses idle hours for full runs and for pre-testing queued branches. |
 | [Release bus](docs/guide.md#release-bus) | Lets two machines see each other's trains and deploys. |
+| [Roles](#roles) | Which machine deploys, as a cross-machine lease with fencing. Any machine can take over at any time. |
 | [Attestation](docs/guide.md#attestation) | A signed record of what ran on a commit's exact tree. |
+
+## Roles
+
+A role answers "which machine does this?", usually "which machine deploys". It is a lease
+that every machine can see, kept in a shared store, and any machine can take it over at
+any time. The design is in [docs/design/roles.md](docs/design/roles.md).
+
+```json
+{ "roles": { "store": "gs://my-bucket/tracegate",
+             "deployer": { "preflight": "bash examples/preflight-signins.sh", "ttl": "30m" } } }
+```
+
+The store is `gs://bucket/prefix` (through `gcloud`), `git+<remote>#refs/tracegate/roles`
+(one ref per role on any git remote, no cloud account needed), or `file:///dir` (a shared
+disk). `TRACEGATE_ROLES_STORE` overrides the config.
+
+```sh
+tracegate role status deployer
+tracegate role claim deployer --ttl 30m        # if it is free or expired; --hold keeps renewing
+tracegate role renew deployer                  # the heartbeat
+tracegate role handover deployer --to mac-b    # an offer: mac-b accepts by running `claim`
+tracegate role take deployer --reason "mac-a's sign-in expired"   # at any time, even from a live holder
+tracegate role release deployer
+tracegate lease --class deploy --role deployer -- ./deploy.sh      # only on the holder
+tracegate role check deployer --epoch "$TRACEGATE_ROLE_EPOCH"      # right before the traffic shift
+```
+
+- **Fencing.** Every change of holder raises the role's epoch by one. `lease --role` runs
+  its command only on the holder and passes the epoch in `TRACEGATE_ROLE_EPOCH`, and it
+  renews the role while the command runs. `role check --epoch N` exits 0 only while N is
+  still current, this machine holds it, and the lease hasn't expired.
+- **A takeover never kills a deploy.** If another machine takes the role mid-deploy, the
+  old holder's deploy keeps running, because stopping a deploy half way is worse. It can't
+  start another, and its next `role check` fails, so it stops before its irreversible step.
+  Call `role check` right before that step.
+- **Races.** Every change is a compare-and-swap on the store. When two machines claim at
+  once, exactly one wins, and the other exits 3.
+- **Preflight.** `claim` and `take` run the role's `preflight` on the machine that wants
+  the role (it also runs when a handover is accepted), and refuse the role if it fails
+  (exit 5). `take --skip-preflight` exists for emergencies. It prints a loud warning and
+  is recorded in the audit trail.
+- **Per-repo roles.** `deployer` is global, and `deployer:<repo>` is one repo's. In a
+  repo, `deployer` means `deployer:<repo>` if the config declares it or the store has a
+  record of it. Otherwise it means the global role. `<repo>` is `roles.repo`, or else the
+  clone's directory name.
+- **Audit.** Each role keeps its last 200 changes: action, epoch, host, user, time, reason,
+  previous holder, and the preflight result. `role status` shows the latest.
+- **Exit codes:** 0 ok, 2 usage, 3 held by another machine (or lost a race), 4 fenced (not
+  the holder, a stale epoch, or expired), 5 preflight failed, 6 store unreachable.
+- **Holding a role is never an approval.** It decides which machine deploys, never whether
+  something may be deployed. Approvals stay with the people and scripts that give them.
+
+## Unattended deploy machines: sign-ins
+
+On 2026-11-27, a deploy machine whose sign-in had expired blocked two deploys for hours.
+Personal sign-ins expire; a deploy machine has to notice that before it becomes the
+deployer, not halfway through a deploy.
+
+**Check them in the preflight.**
+[`examples/preflight-signins.sh`](examples/preflight-signins.sh) checks Google Cloud
+(`gcloud auth print-access-token`), Firebase (`firebase projects:list`) and GitHub
+(`gh auth status`). If any check fails, it exits non-zero, names the sign-in that failed,
+and prints the command that renews it. `SIGNINS="gcloud gh"` limits which ones it checks,
+and `SIGNINS_ADC=1` also checks application-default credentials. It never prints a token
+or a key; it reads only account names. Use it as the role's `preflight`, and a machine
+with an expired sign-in can't claim the role.
+
+**Renewing without a browser on the deploy machine.** Reach the machine over SSH (Tailscale
+is the usual route), and run:
+
+| Sign-in | Command on the deploy machine | Then |
+|---|---|---|
+| Google Cloud | `gcloud auth login <account> --no-browser` | It prints a `gcloud auth login --remote-bootstrap=…` command. Run that on a machine with a browser, sign in, and paste its output back. For application-default credentials, run `gcloud auth application-default login --no-browser` the same way. |
+| Firebase | `firebase login --reauth --no-localhost` | Open the printed link on any machine, sign in, and paste the code back. |
+| GitHub | `gh auth login` | Choose the web browser option, and enter the device code at https://github.com/login/device from any machine. |
+
+**Better: a service account per app project.** For each project the machine deploys:
+- Create a service account with only the roles that deploy needs.
+- Save its key on the deploy machine with mode 600 (`chmod 600 key.json`), outside any
+  repository.
+- Point the deploy at it with `GOOGLE_APPLICATION_CREDENTIALS`. When that file is
+  readable, the preflight passes the Google and Firebase checks from it and says so.
+
+A key doesn't expire with a person's session, and it can do only what that deploy needs.
+
+- **Rotate** a key by creating a new one
+  (`gcloud iam service-accounts keys create new.json --iam-account <sa>`), switching
+  `GOOGLE_APPLICATION_CREDENTIALS` to it, checking a deploy, and then deleting the old one
+  (`gcloud iam service-accounts keys delete <key-id> --iam-account <sa>`). Rotating on a
+  schedule, for example every 90 days, keeps any copy you missed short-lived.
+- **Revoke** at once when a machine is lost or a key may have leaked: delete the key
+  (`keys delete`), or disable the whole account
+  (`gcloud iam service-accounts disable <sa>`). Then `role take` the role from another
+  machine. The lost machine's next `role check` fails.
+- Never commit a key, and never paste one into a note, a log or a chat.
 
 **Why not Vitest's `recordDependencies`?** [The comparison](docs/compare/vitest-record-dependencies.md)
 runs both on the same commits. Tracegate selects per function, sees files read at run

@@ -9,6 +9,7 @@
 //   TRACEGATE_CONFIG        config file (default: <root>/tracegate.config.json)
 //   TRACEGATE_LEDGER        ledger directory (default: <git common dir>/tracegate)
 //   TRACEGATE_HOST          host name used in log file names (default: hostname)
+//   TRACEGATE_ROLES_STORE   the role store URL, over "roles.store" (src/role/)
 //   TRACEGATE               mode for every lane: off|shadow|enforce|auto (default auto)
 //   TRACEGATE_<LANE>        mode for one lane (upper-cased, non-alphanumerics → _)
 //   TRACEGATE_MAX_AGE_HOURS footprint age limit (default 72)
@@ -156,6 +157,8 @@ export function ctx() {
     host: (process.env.TRACEGATE_HOST || os.hostname().split('.')[0] || 'host').replace(/[^A-Za-z0-9_-]/g, '_'),
     sync: cfg.sync ?? null,
     bus: cfg.bus ?? null, // the release bus reads it (src/bus.mjs)
+    roles: cfg.roles ?? null, // cross-machine roles read it (src/role/)
+    commonDir: common,
     daemon: cfg.daemon ?? null, // `tracegate daemon` reads it (src/daemon.mjs)
     broker: cfg.broker ?? null, // the broker reads it (src/broker/paths.mjs)
     red: { ...DEFAULTS.red, ...(cfg.red ?? {}), ...(process.env.TRACEGATE_RED_ESCALATE ? { escalate: process.env.TRACEGATE_RED_ESCALATE !== 'off' } : {}) },
