@@ -5,8 +5,12 @@
 // it. The kernel closes a socket when its process dies, SIGKILL included, so no
 // stale-lock cleanup exists that could race (the classic mkdir-lock failure).
 //
+// Scope (paths.mjs): by default one broker serves every repo on the host. The first
+// one to start keeps ITS repo's config; `hello` tells each client who that was, and
+// the client warns when its own config disagrees.
+//
 // Persistence (I8): every state change is an event appended to
-// <ledger>/broker/events.jsonl BEFORE it is acted on. On start the log is
+// <broker dir>/events.jsonl BEFORE it is acted on. On start the log is
 // replayed; jobs a previous broker left queued or running are closed with
 // reason `broker-restart` (their connections died with it).
 //
@@ -19,9 +23,10 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
+import { ctx } from '../config.mjs';
 import { adapt, changed, deriveDefaults } from './adapt.mjs';
 import { apply, explain, initialState, queueOf, runningOf, schedule, snapshot } from './core.mjs';
-import { brokerConfig, brokerDir, socketPath } from './paths.mjs';
+import { brokerConfig, brokerDir, ledgerIdentity, MIN_CLIENT_PROTOCOL, packageVersion, PROTOCOL, socketPath } from './paths.mjs';
 import { hardware, sample } from './sampler.mjs';
 
 const ADVISOR_TIMEOUT_MS = 10_000;
@@ -33,6 +38,9 @@ export async function serve({ quiet = false } = {}) {
   const logFile = path.join(dir, 'events.jsonl');
   const sock = socketPath();
   const log = (...a) => { if (!quiet) console.log(new Date().toISOString(), ...a); };
+  const version = packageVersion();
+  // Who started this broker: its config is the one in force for every repo it serves.
+  const startedBy = { ...ledgerIdentity(), config: (() => { try { return ctx().configPath; } catch { return null; } })() };
 
   // Every memory default is a share of THIS machine (the config is shared by all).
   const hw = await hardware();
@@ -57,7 +65,7 @@ export async function serve({ quiet = false } = {}) {
   // A limit from a previous broker's last sample is stale: start from the full
   // capacity, logged, so a replay of this log sees the same reset (I8).
   emit({ type: 'capacity', cpu: st.capacity, memMB: null, pressure: null, why: ['broker start'], applied: true,
-    host: cfg.host, hw: { cores: hw.cores, perfCores: hw.perfCores, totalMB: hw.totalMB, arch: hw.arch, platform: hw.platform, cgroup: hw.cgroup } });
+    host: cfg.host, scope: cfg.scope, version, protocol: PROTOCOL, startedBy, hw: { cores: hw.cores, perfCores: hw.perfCores, totalMB: hw.totalMB, arch: hw.arch, platform: hw.platform, cgroup: hw.cgroup } });
 
   // ── connections ───────────────────────────────────────────────────────────
   const conns = new Map(); // socket → { owner, jobs: Set<id> }
@@ -184,16 +192,32 @@ export async function serve({ quiet = false } = {}) {
     const c = conns.get(s);
     const now = Date.now();
     switch (msg.op) {
-      case 'hello':
-        c.owner = String(msg.owner ?? c.owner);
+      case 'hello': {
+        // A client that sends no protocol number is 1 (0.10.x and raw socket users).
+        const proto = Number.isInteger(msg.protocol) ? msg.protocol : 1;
+        if (proto < MIN_CLIENT_PROTOCOL) {
+          send(s, { type: 'error', ref: msg.ref, code: 'protocol', protocol: PROTOCOL, minProtocol: MIN_CLIENT_PROTOCOL, version,
+            error: `this broker (tracegate-ci ${version ?? '?'}, protocol ${PROTOCOL}, pid ${process.pid}) serves clients of protocol ${MIN_CLIENT_PROTOCOL} or later; this client speaks ${proto}` });
+          break;
+        }
+        if (msg.owner !== undefined) c.owner = String(msg.owner);
         if (Number.isInteger(msg.pid) && msg.pid > 1) c.pid = msg.pid; // whose process tree to measure
-        send(s, { type: 'hello', capacity: st.capacity, pid: process.pid }); break;
+        if (msg.repo) c.repo = String(msg.repo).slice(0, 200);
+        if (Number.isInteger(msg.capacity) && msg.capacity !== st.capacity && msg.ledger !== startedBy.ledger) log(`config mismatch: ${msg.repo ?? 'a client'} asks for capacity ${msg.capacity}; this broker was started by ${startedBy.repo ?? '?'} with ${st.capacity} (the first broker's config wins)`);
+        send(s, { type: 'hello', ref: msg.ref, capacity: st.capacity, classes: st.classes, pid: process.pid, protocol: PROTOCOL, minProtocol: MIN_CLIENT_PROTOCOL, version, scope: cfg.scope, startedBy });
+        break;
+      }
       case 'request': {
         const tokens = Number.isInteger(msg.tokens) && msg.tokens > 0 ? Math.min(msg.tokens, st.capacity) : 1;
         if (msg.class && !st.classes[msg.class]) { send(s, { type: 'error', ref: msg.ref, error: `unknown class ${msg.class}; known: ${Object.keys(st.classes).join(', ')}` }); break; }
+        // I12: on-demand work is the work that must not be stopped; a preemptible job cannot be it.
+        if (msg.onDemand === true && st.classes[msg.class ?? 'adhoc']?.preemptible) { send(s, { type: 'error', ref: msg.ref, error: `class ${msg.class} is preemptible, so it cannot be on demand` }); break; }
         const parent = typeof msg.parent === 'string' && st.jobs.get(msg.parent)?.state === 'running' ? msg.parent : null;
         const id = `j${st.jobNo + 1}`;
         emit({ type: 'enqueue', id, owner: c.owner, class: msg.class ?? 'adhoc', label: String(msg.label ?? '').slice(0, 200), tokens,
+          ...(typeof msg.ledger === 'string' && msg.ledger ? { ledger: msg.ledger.slice(0, 1024) } : {}),
+          ...(typeof msg.repo === 'string' && msg.repo ? { repo: msg.repo.slice(0, 200) } : c.repo ? { repo: c.repo } : {}),
+          ...(msg.onDemand === true ? { onDemand: true } : {}),
           ...(Number.isInteger(msg.minTokens) && msg.minTokens > 0 && msg.minTokens < tokens ? { minTokens: msg.minTokens } : {}),
           ...(Number.isFinite(msg.memPerToken) && msg.memPerToken > 0 ? { memPerToken: msg.memPerToken } : {}),
           ...(msg.observe === true ? { observe: true, ...(msg.yield === true ? { yieldOthers: true } : {}) } : {}),
@@ -201,7 +225,7 @@ export async function serve({ quiet = false } = {}) {
           deadline: Number.isFinite(msg.deadline) ? msg.deadline : null });
         ownerOf.set(id, s); c.jobs.add(id);
         const j = st.jobs.get(id);
-        log(`enqueue ${id} ${j.class} ${j.label} tokens=${tokens}${j.exclusive ? ' exclusive' : ''}${parent ? ` parent=${parent}` : ''}`);
+        log(`enqueue ${id} ${j.class} ${j.label} tokens=${tokens}${j.exclusive ? ' exclusive' : ''}${j.onDemand ? ' ON-DEMAND' : ''}${j.repo ? ` repo=${j.repo}` : ''}${parent ? ` parent=${parent}` : ''}`);
         tick();
         if (st.jobs.get(id)?.state === 'queued') send(s, { type: 'queued', id, ref: msg.ref, explain: explain(st, id, Date.now()) });
         else if (st.jobs.get(id)) send(s, { type: 'accepted', id, ref: msg.ref });
@@ -216,7 +240,7 @@ export async function serve({ quiet = false } = {}) {
         endJob(msg.id, j.state === 'queued' ? 'cancel' : 'release', `cancelled by ${c.owner}`);
         tick(); send(s, { type: 'ok', ref: msg.ref }); break;
       }
-      case 'status': send(s, { type: 'status', ref: msg.ref, ...snapshot(st, now), pid: process.pid, socket: sock, log: logFile }); break;
+      case 'status': send(s, { type: 'status', ref: msg.ref, ...snapshot(st, now), pid: process.pid, socket: sock, log: logFile, scope: cfg.scope, version, protocol: PROTOCOL, startedBy }); break;
       case 'explain': send(s, { type: 'explain', ref: msg.ref, ...explain(st, String(msg.id), now) }); break;
       case 'machine': {
         const { trees: _t, ...reading } = lastSample ?? {};
@@ -265,7 +289,7 @@ export async function serve({ quiet = false } = {}) {
   await resample();
   await listen(server, sock);
   fs.writeFileSync(path.join(dir, 'broker.pid'), String(process.pid));
-  log(`tracegate broker: pid ${process.pid}, capacity ${st.capacity}, ${hw.cores} cores${hw.perfCores ? ` (${hw.perfCores} performance)` : ''}, ${hw.totalMB} MB${hw.cgroup ? ' (container limits)' : ''}, adaptive ${policy.mode}, socket ${sock}`);
+  log(`tracegate broker${version ? ` ${version}` : ''}: ${cfg.scope} scope, started by ${startedBy.repo ?? '(no repo)'}, pid ${process.pid}, capacity ${st.capacity}, ${hw.cores} cores${hw.perfCores ? ` (${hw.perfCores} performance)` : ''}, ${hw.totalMB} MB${hw.cgroup ? ' (container limits)' : ''}, adaptive ${policy.mode}, socket ${sock}`);
   const timer = setInterval(tick, 1000); timer.unref();
   const sampler = setInterval(resample, Math.max(1, policy.sampleSeconds) * 1000); sampler.unref();
 

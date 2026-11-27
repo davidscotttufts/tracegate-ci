@@ -322,16 +322,19 @@ try {
   check('MCP: machine_load returns the hardware, the budgets and the policy defaults for this host', ml.hw?.totalMB > 0 && ml.limit?.cpu === 8 && ml.policy?.defaultTokenMB === 500, JSON.stringify(ml).slice(0, 300));
   mcp.stdin.end(); b.kill('SIGTERM'); await sleep(200);
 }
-// The broker's state is per host by default (a ledger can be shared by machines).
+// The broker's state is per host: machine-wide by default, per ledger on request.
 {
   const repo = path.join(tmp, 'repo'); fs.mkdirSync(repo);
   spawnSync('git', ['init', '-q', repo]);
-  const r = spawnSync(process.execPath, ['--input-type=module', '-e', `
+  const dirOf = (scope) => spawnSync(process.execPath, ['--input-type=module', '-e', `
     process.env.TRACEGATE_LEDGER = ${JSON.stringify(path.join(tmp, 'ledger'))};
     delete process.env.TRACEGATE_BROKER_DIR; process.env.TRACEGATE_HOST = 'mac-a';
+    ${scope ? `process.env.TRACEGATE_BROKER_SCOPE = ${JSON.stringify(scope)};` : 'delete process.env.TRACEGATE_BROKER_SCOPE;'}
     const { brokerDir } = await import(${JSON.stringify(path.join(PKG, 'src/broker/paths.mjs'))});
-    console.log(brokerDir());`], { encoding: 'utf8', cwd: repo, env: { ...process.env, TRACEGATE_BROKER_DIR: '' } });
-  check('the broker directory is per host: <ledger>/broker/<host>', r.stdout.trim().endsWith(path.join('ledger', 'broker', 'mac-a')), r.stdout + r.stderr);
+    console.log(brokerDir());`], { encoding: 'utf8', cwd: repo, env: { ...process.env, TRACEGATE_BROKER_DIR: '', HOME: path.join(tmp, 'home') } });
+  const m = dirOf(null); const l = dirOf('ledger');
+  check('the broker directory is per host and machine-wide by default: $HOME/.tracegate/broker/<host>', m.stdout.trim() === path.join(tmp, 'home', '.tracegate', 'broker', 'mac-a'), m.stdout + m.stderr);
+  check('...and <ledger>/broker/<host> with scope ledger', l.stdout.trim().endsWith(path.join('ledger', 'broker', 'mac-a')), l.stdout + l.stderr);
 }
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(fail ? `\n== adaptive tests: ${fail} FAILED, ${pass} passed ==` : `\n== adaptive tests: ${pass} passed ==`);

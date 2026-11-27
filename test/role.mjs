@@ -136,6 +136,30 @@ const lease = (host, args) => spawnSync(process.execPath, [CLI, 'lease', '--quie
   check('take mid-deploy: the old holder\'s running deploy is not killed, and stops at its check before the traffic shift', t.status === 0 && code === 4 && out.includes('STOPPED BEFORE SHIFT') && !out.includes('TRAFFIC SHIFTED'), `${t.status} ${code} ${out}`);
 }
 
+// ── a requested deploy that needs the role: --on-demand AND --role ───────────
+{
+  role('mac-a', ['claim', 'shipper']);
+  const events = () => fs.readFileSync(path.join(tmp, 'broker', 'events.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  const waitFor = async (pred) => { for (let i = 0; i < 100; i++) { try { if (events().some(pred)) return true; } catch { /* no log yet */ } await sleep(100); } return false; };
+  const bg = (host, args) => { const p = spawn(process.execPath, [CLI, 'lease', '--quiet', ...args], { cwd: repo, env: { ...baseEnv, TRACEGATE_HOST: host }, stdio: ['ignore', 'pipe', 'pipe'] }); let out = ''; p.stdout.on('data', (d) => { out += d; }); p.stderr.on('data', (d) => { out += d; }); return { p, out: () => out, code: new Promise((r) => p.on('exit', r)) }; };
+  const done = path.join(tmp, 'hog-done');
+  const hog = bg('mac-a', ['--class', 'gate', '--tokens', '2', '--label', 'od-hog', '--', process.execPath, '-e', `const fs=require('fs'); setInterval(()=>{ if(fs.existsSync(${JSON.stringify(done)})) process.exit(0); },100)`]);
+  await waitFor((e) => e.type === 'grant' && events().some((x) => x.type === 'enqueue' && x.id === e.id && x.label === 'od-hog'));
+  const queued = bg('mac-a', ['--class', 'gate', '--tokens', '2', '--label', 'od-queued-gate', '--', process.execPath, '-e', 'console.log("GATE")']);
+  await waitFor((e) => e.type === 'enqueue' && e.label === 'od-queued-gate');
+  const refused = spawnSync(process.execPath, [CLI, 'lease', '--quiet', '--class', 'deploy', '--tokens', '2', '--on-demand', '--role', 'shipper', '--label', 'od-refused', '--', process.execPath, '-e', 'console.log("SHIPPED")'], { cwd: repo, env: { ...baseEnv, TRACEGATE_HOST: 'mac-b' }, encoding: 'utf8', timeout: 30000 });
+  check('on-demand + role: a requested deploy on a host without the role is refused (exit 4) and never queues', refused.status === 4 && !refused.stdout.includes('SHIPPED') && !events().some((e) => e.type === 'enqueue' && e.label === 'od-refused'), `${refused.status} ${refused.stdout} ${refused.stderr}`);
+  const od = bg('mac-a', ['--class', 'deploy', '--tokens', '2', '--on-demand', '--role', 'shipper', '--label', 'od-deploy', '--', process.execPath, '-e', 'console.log("DEPLOY epoch=" + process.env.TRACEGATE_ROLE_EPOCH)']);
+  await waitFor((e) => e.type === 'enqueue' && e.label === 'od-deploy');
+  fs.writeFileSync(done, '');
+  const [c1, c2] = await Promise.race([Promise.all([od.code, queued.code]), sleep(20000).then(() => ['timeout', 'timeout'])]);
+  await hog.code;
+  const ev = events(); const idOf = (label) => ev.find((e) => e.type === 'enqueue' && e.label === label)?.id;
+  const seqOf = (label) => ev.find((e) => e.type === 'grant' && e.id === idOf(label))?.seq ?? Infinity;
+  check('on-demand + role: the holder\'s requested deploy goes ahead of a gate queued before it, with the role\'s epoch', c1 === 0 && c2 === 0 && seqOf('od-deploy') < seqOf('od-queued-gate') && od.out().includes(`DEPLOY epoch=${rec('shipper').epoch}`) && ev.find((e) => e.type === 'enqueue' && e.label === 'od-deploy')?.onDemand === true,
+    `${c1} ${c2} deploy@${seqOf('od-deploy')} gate@${seqOf('od-queued-gate')} ${od.out()}`);
+}
+
 // ── per-repo roles override the global one ───────────────────────────────────
 {
   // The repo is "webapp" (its directory). mac-b holds the global deployer now.

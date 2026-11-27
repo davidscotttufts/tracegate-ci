@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+Changed (one broker per machine, not per repo):
+- The broker used to be keyed by its ledger: `<ledger>/broker/<host>/`, and a socket named
+  by a hash of that directory. Every repo that vendors Tracegate has its own ledger, so each
+  repo ran its own broker, and none of them could see the others' work. MEASURED on one Mac
+  on 2026-11-27: one repo's background daemon could not see another repo's gate, started
+  test batches beside other repos' gates 11 times in one day, and memory ran out.
+- Now the default scope is `machine`: one broker per host and user, shared by every repo.
+  Its state is `$HOME/.tracegate/broker/<host>/`, and its socket is
+  `$TMPDIR/tracegate-m<uid>-<hash>.sock`, named by the user and host, not by the ledger. A
+  daemon lease from one repo yields to a gate from another.
+- Each job records the `ledger` and `repo` it came from, and `tracegate queue` shows the
+  repo. Durations and memory are learned per `(class, label, ledger)`, so one repo's
+  `gate main` never sets another's estimate.
+- One capacity per host: the first broker to start uses its repo's config until it exits.
+  A client whose own config gives a different capacity gets a warning naming the repo that
+  started the broker. It is not refused.
+- `TRACEGATE_BROKER_SCOPE=ledger`, or `"broker": {"scope": "ledger"}`, restores the old
+  layout exactly, socket name included. `TRACEGATE_BROKER_DIR` and
+  `TRACEGATE_BROKER_SOCKET` still win over the scope.
+- `daemon install` also carries `TRACEGATE_BROKER_SCOPE` and `TMPDIR` into the unit, so a
+  scheduled tick finds the same socket as your shell.
+
+Added (a deploy someone asked for runs now):
+- `tracegate lease --on-demand`: ahead of every queued job that is not itself on demand,
+  whatever its class. While it lives, preemptible work (the daemon) is asked to yield at
+  once and none starts. It never preempts work that is not preemptible: a running gate
+  keeps running, and the on-demand job starts as soon as the gate releases. A preemptible
+  class cannot be on demand. Nothing decides *when* a deploy may run; that stays in each
+  repo's scripts.
+
+Added (version skew between repos):
+- A socket handshake. Every client says which protocol it speaks (2), and the broker
+  answers with its own, its version and which repo started it. A broker from 0.10.x or
+  older sends no number and counts as protocol 1.
+- A plain lease runs on an older broker, with a warning. `--on-demand` against an older
+  broker exits **76** (`EX_PROTOCOL`) without running the command, because that broker
+  would ignore the flag and the deploy would quietly wait in the queue. A client below the
+  broker's minimum protocol is refused with the same code. In every case nothing is started
+  beside the broker that is already there.
+- Every client refuses a socket owned by another user.
+
 Added (any machine can take over as the deployer, at any time):
 - `tracegate role status | claim | renew | release | handover | take | check`. A role is a
   lease that every machine can see, such as "this machine deploys", kept in a shared store
@@ -26,6 +67,16 @@ Added (any machine can take over as the deployer, at any time):
   sign-in that has expired. It never prints a token. The README has a new section,
   "Unattended deploy machines: sign-ins".
 - Holding a role is never an approval to deploy.
+
+Upgrading:
+- After upgrading, a repo's leases go to the machine broker. A repo still on 0.10.x keeps
+  its own per-ledger broker, so the two do not see each other until both are upgraded.
+- The machine broker starts with no history, so its first few runs of each job have no
+  duration estimate (and so do not backfill). It learns them again in three runs. The old
+  `<ledger>/broker/` directory is left in place; delete it when you no longer need its log.
+- A broker that a 0.10.x client started on the old socket keeps running until its idle
+  timeout (30 min). Stop it with the old version's `tracegate broker stop` if you need its
+  capacity back sooner.
 
 ## 0.10.6 (2026-11-23)
 

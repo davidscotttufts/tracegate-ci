@@ -125,7 +125,7 @@ runs the whole lane. All settings are in the [guide](docs/guide.md#configuration
 
 | Feature | What it's for |
 |---|---|
-| [Broker](docs/guide.md#broker) | One queue for the machine. Gates, background jobs and every agent's test runs share the CPU and memory instead of fighting over them. |
+| [Broker](docs/guide.md#broker) | One queue for the machine, shared by every repo on it. Gates, background jobs, deploys someone asked for (`--on-demand`) and every agent's test runs share the CPU and memory instead of fighting over them. |
 | [Merge train](docs/guide.md#merge-train) | Gates a batch of branches as their real merge commit, bisects a red batch, and lands only exactly what passed. |
 | [Red Reader](docs/guide.md#red-reader) | An agent reads each failed run and can mark a "flaky" failure as a real bug. It can never do the reverse. |
 | [Silence guard](docs/guide.md#silence-guard) | Fails a change that skips, focuses or deletes tests, until a person approves it. |

@@ -79,10 +79,15 @@ const USAGE = `usage: tracegate <command> [options]
 
 Broker (one queue for the machine's CI work; see docs/design/broker.md):
   lease   [--class c] [--tokens n] [--min-tokens m] [--mem-per-token MB] [--exclusive]
-          [--est seconds] [--label l] [--deadline-min m] [--requeue] [--jobserver] [--role r] [--quiet] -- <command…>
+          [--est seconds] [--label l] [--deadline-min m] [--requeue] [--jobserver] [--on-demand]
+          [--role r] [--quiet] -- <command…>
                                        run a command when the broker grants capacity;
                                        --min-tokens makes it elastic (granted m..n workers);
-                                       --jobserver exports a make jobserver with the grant
+                                       --jobserver exports a make jobserver with the grant;
+                                       --on-demand: a person asked for it now (a deploy): ahead
+                                       of the queue, preemptible work yields; never stops a gate;
+                                       --role r: only on the role's holder, with its epoch in
+                                       TRACEGATE_ROLE_EPOCH (combines with --on-demand)
   observe --class c [--tokens n] [--label l] [--exclusive] [--yield] --watch-pid P [--quiet]
                                        register work coordinated elsewhere, never waiting;
                                        the broker records whether it WOULD have waited
@@ -116,8 +121,9 @@ function parse(argv) {
 
 function printQueue(s, json) {
   if (json) { delete s.ref; delete s.type; console.log(JSON.stringify(s, null, 2)); return; }
-  const row = (j) => `  ${j.id.padEnd(6)} ${j.class.padEnd(8)} ${String(j.tokens).padStart(3)}${j.minTokens ? `(≥${j.minTokens})` : ''}${j.exclusive ? ' excl' : '     '}${j.memMB ? ` ${j.memMB}MB` : ''}${j.contended ? ' CONTENDED' : ''}  ${j.label}`;
+  const row = (j) => `  ${j.id.padEnd(6)} ${j.class.padEnd(8)} ${String(j.tokens).padStart(3)}${j.minTokens ? `(≥${j.minTokens})` : ''}${j.exclusive ? ' excl' : '     '}${j.memMB ? ` ${j.memMB}MB` : ''}${j.contended ? ' CONTENDED' : ''}${j.onDemand ? ' ON-DEMAND' : ''}  ${j.repo ? `[${j.repo}] ` : ''}${j.label}`;
   const lim = s.limit ?? { cpu: s.capacity };
+  if (s.scope) console.log(`broker ${s.version ?? ''} (${s.scope} scope, protocol ${s.protocol ?? 1}${s.startedBy?.repo ? `, started by ${s.startedBy.repo}` : ''})`.replace('broker  (', 'broker ('));
   console.log(`capacity ${lim.cpu} of ${s.capacity} token(s)${lim.memMB !== null && lim.memMB !== undefined ? `, memory budget ${lim.memMB} MB` : ''}, in use ${s.used}${s.usedMB ? ` (${s.usedMB} MB reserved)` : ''} (broker pid ${s.pid})`);
   if (lim.why?.length && (lim.cpu < s.capacity || lim.pressure)) console.log(`  reduced: ${lim.why.join('; ')}`);
   if (s.shadowLimit) console.log(`  adaptive (shadow) would allow ${s.shadowLimit.cpu} token(s)${s.shadowLimit.memMB !== null ? `, ${s.shadowLimit.memMB} MB` : ''}: ${s.shadowLimit.why.join('; ')}`);
@@ -185,5 +191,5 @@ try {
   else { console.error(USAGE); process.exit(cmd === undefined || cmd === 'help' || cmd === '--help' ? 0 : 2); }
 } catch (e) {
   console.error(`tracegate ${cmd}: ${e.message}`);
-  process.exit(2);
+  process.exit(e.exitCode ?? 2); // 76: the broker on the socket cannot serve this client
 }
