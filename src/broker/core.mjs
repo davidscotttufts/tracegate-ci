@@ -46,6 +46,7 @@ export const DEFAULT_CLASSES = Object.freeze({
   gate: { priority: 50, preemptible: false },
   train: { priority: 50, preemptible: false },
   measure: { priority: 50, preemptible: false },
+  pr: { priority: 40, preemptible: false }, // `tracegate pr`: a per-PR bar, below a gate
   adhoc: { priority: 30, preemptible: false },
   daemon: { priority: 10, preemptible: true },
 });

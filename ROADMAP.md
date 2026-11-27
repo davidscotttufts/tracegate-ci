@@ -1,6 +1,6 @@
 # Roadmap
 
-Updated 2026-11-02, at version 0.10.0. What has shipped is in the [changelog](CHANGELOG.md);
+Updated 2026-11-27, after version 0.10.6. What has shipped is in the [changelog](CHANGELOG.md);
 the research behind the design is in [docs/background.md](docs/background.md).
 
 ## Where it stands
@@ -25,6 +25,11 @@ bus. It runs in the private monorepo it came from, whose numbers are published i
 2. **The host project moves onto the package.** It still runs its own copy of the
    predictor. Its ADR 1028 proposes switching lane by lane, after 20 gates where both
    predict side by side.
+
+3. **The per-PR bar is a commit status.** `tracegate pr --post-status` (shipped, Unreleased)
+   sets `local/pr-bar` on a branch's head, so any machine can see which PRs are ready.
+   Next: an integrator that collects the PRs whose head carries a green `local/pr-bar`
+   and gates them in batches partitioned by footprint (the host project's ADR 1169 F2).
 
 ## Later
 

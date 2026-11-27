@@ -97,6 +97,7 @@ those. The full rules are in [How a decision is made](docs/guide.md#how-a-decisi
 | `tracegate report-card` | Miss rates with 95% confidence intervals. `--redact` for a private repo. |
 | `tracegate triage` | Mark a miss as a flaky test or a recorder bug. |
 | `tracegate lease` | Run a command when the machine has room for it. |
+| `tracegate pr` | The per-PR bar: run what a branch can affect, and post `local/pr-bar` on its head. |
 | `tracegate train` | Gate a queue of branches and land the green ones. |
 | `tracegate daemon` | Run full lanes at night and pre-test queued branches. |
 | `tracegate bus` | See what another machine is gating or deploying. |
@@ -120,6 +121,54 @@ those. The full rules are in [How a decision is made](docs/guide.md#how-a-decisi
 
 List your test setup directory under `globals`: every test loads it, so a change there
 runs the whole lane. All settings are in the [guide](docs/guide.md#configuration).
+
+## Per-PR bar: tracegate pr
+
+`tracegate pr` answers one question: is this branch ready to join a batch? For the change
+`base...head` (the merge-base of the base and HEAD, then HEAD), lane by lane, it runs:
+
+1. the branch's own added and changed test files;
+2. the must-run set: every file whose last green verdict Tracegate cannot reuse at this
+   tree (the same rule `tracegate run` uses under enforce);
+3. the always-run set: files matching `pr.alwaysRun`, for ratchets, censuses and the like;
+
+then each command in `pr.commands` (typecheck, lint, static checks). It prints a verdict
+with counts and exits 0 when everything passed, 1 when anything failed.
+
+```json
+{
+  "lanes": { "api": { "dir": "packages/api", "pr": { "commands": ["npx tsc --noEmit"] } } },
+  "pr": {
+    "base": "origin/main",
+    "alwaysRun": ["**/*ratchet*", "**/*census*"],
+    "commands": ["npm run lint"]
+  }
+}
+```
+
+A glob with `**` crosses directories; one with no `/` matches the base name. A lane's own
+`pr.alwaysRun` adds to the top-level list, and its `pr.commands` run in the lane directory.
+With no footprints yet, nothing is reusable, so the must-run set is the whole lane; set
+`"mustRun": false` (top level or per lane) to run only the changed and always-run files
+until the ledger has history.
+
+```sh
+npx tracegate pr --dry-run                 # what would run, and why
+npx tracegate pr                           # run it
+npx tracegate pr --post-status             # run it, then set the GitHub status
+```
+
+`--post-status` posts a commit status with `gh api repos/{owner}/{repo}/statuses/<sha>`:
+context `local/pr-bar`, state `success` with the counts, or `failure` naming the first
+failing item. It refuses (exit 3, nothing run, nothing posted) on a dirty tree, including
+untracked files, or when `--head` or `--sha` is not the checked-out HEAD, and posts nothing
+if HEAD or the tree changed while the bar ran. A new commit has no status, so a branch that
+changes must pass again. A green bar whose status could not be posted exits 4. `--repo
+owner/name` names the repository when the remote doesn't.
+
+The bar runs under one broker lease of class `pr` (priority 40, below a gate), so it waits
+its turn on a busy machine; `--tokens n` sizes it (default 2) and `--no-lease` skips it.
+It records nothing: a PR bar is not a lane run and never counts toward the entry bar.
 
 ## What else is in the box
 
