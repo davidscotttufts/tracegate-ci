@@ -43,6 +43,31 @@ Added (version skew between repos):
   beside the broker that is already there.
 - Every client refuses a socket owned by another user.
 
+Added (any machine can take over as the deployer, at any time):
+- `tracegate role status | claim | renew | release | handover | take | check`. A role is a
+  lease that every machine can see, such as "this machine deploys", kept in a shared store
+  (`"roles": {"store": …}`): `gs://bucket/prefix`, `git+<remote>#<ref prefix>` (one ref per
+  role, written with `push --force-with-lease`, needing no cloud account), or `file:///dir`.
+  Every change is a compare-and-swap, so of two machines that race, exactly one wins; the
+  other exits 3.
+- An epoch, the fencing token, rises on every change of holder. `lease --role <role>` runs
+  its command only on the holder, passes `TRACEGATE_ROLE_EPOCH`, and renews the role while
+  the command runs. `role check <role> --epoch N` exits 0 only while N is current, so a
+  deploy that lost the role stops before its irreversible step. A takeover never kills the
+  old holder's running deploy.
+- `take --reason` moves the role from any holder, live or not. `handover --to <host>` is an
+  offer, and the role moves only when that host accepts by running `claim`.
+- A role's `preflight` command runs on the machine that wants it, at claim, take and
+  accepted handover, and a failure refuses the role (exit 5). `take --skip-preflight` is
+  loud and audited.
+- Per-repo roles (`deployer:<repo>`) override the global one for that repo.
+- Each role keeps an audit trail of its last 200 changes.
+- `examples/preflight-signins.sh`: a preflight that checks the gcloud, Firebase and GitHub
+  sign-ins, or a service account key, and prints the headless renewal command for each
+  sign-in that has expired. It never prints a token. The README has a new section,
+  "Unattended deploy machines: sign-ins".
+- Holding a role is never an approval to deploy.
+
 Upgrading:
 - After upgrading, a repo's leases go to the machine broker. A repo still on 0.10.x keeps
   its own per-ledger broker, so the two do not see each other until both are upgraded.

@@ -69,15 +69,25 @@ const USAGE = `usage: tracegate <command> [options]
                                        deploying, from a shared store ("bus": "gs://…" or a
                                        directory). Advisory: it warns, never waits or refuses
 
+  role    status [<role>] | claim <role> [--ttl 30m] [--hold] | renew <role> [--epoch N]
+          | release <role> | handover <role> --to <host> | take <role> --reason "…" [--skip-preflight]
+          | check <role> --epoch N
+                                       a cross-machine lease with fencing ("which machine
+                                       deploys"), in "roles": {"store": "gs://…" | "git+<remote>"
+                                       | "file:///dir"}. Exit 3 held, 4 fenced, 5 preflight, 6 store.
+                                       Holding a role is never an approval (docs/design/roles.md)
+
 Broker (one queue for the machine's CI work; see docs/design/broker.md):
   lease   [--class c] [--tokens n] [--min-tokens m] [--mem-per-token MB] [--exclusive]
           [--est seconds] [--label l] [--deadline-min m] [--requeue] [--jobserver] [--on-demand]
-          [--quiet] -- <command…>
+          [--role r] [--quiet] -- <command…>
                                        run a command when the broker grants capacity;
                                        --min-tokens makes it elastic (granted m..n workers);
                                        --jobserver exports a make jobserver with the grant;
                                        --on-demand: a person asked for it now (a deploy): ahead
-                                       of the queue, preemptible work yields; never stops a gate
+                                       of the queue, preemptible work yields; never stops a gate;
+                                       --role r: only on the role's holder, with its epoch in
+                                       TRACEGATE_ROLE_EPOCH (combines with --on-demand)
   observe --class c [--tokens n] [--label l] [--exclusive] [--yield] --watch-pid P [--quiet]
                                        register work coordinated elsewhere, never waiting;
                                        the broker records whether it WOULD have waited
@@ -160,6 +170,7 @@ try {
   else if (cmd === 'daemon') process.exitCode = (await import('./daemon.mjs')).daemon(process.argv[3], o);
   else if (cmd === 'conductor') (await import('./conductor.mjs')).conductor(process.argv[3], o);
   else if (cmd === 'run') process.exitCode = runLane(o, rest);
+  else if (cmd === 'role') { const n = process.argv[4] && !process.argv[4].startsWith('--') ? process.argv[4] : undefined; process.exitCode = await (await import('./role/index.mjs')).roleCli(process.argv[3], n, o); }
   else if (cmd === 'lease') process.exitCode = await (await import('./broker/client.mjs')).lease(o, rest);
   else if (cmd === 'observe') process.exitCode = await (await import('./broker/client.mjs')).observe(o);
   else if (cmd === 'observed') (await import('./broker/observed.mjs')).observed(o);
