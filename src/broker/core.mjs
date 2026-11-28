@@ -51,6 +51,27 @@ export const DEFAULT_CLASSES = Object.freeze({
   daemon: { priority: 10, preemptible: true },
 });
 
+// ── release windows (ADR 1166 D9.3) ─────────────────────────────────────────
+// A class may carry a window: it starts only inside it, and such jobs run one at
+// a time. The release window is 23:00–06:00 America/New_York, so the comparison
+// is in that zone, not UTC — a window that moves with DST is the whole point.
+function minutesInTz(now, tz) {
+  const f = new Intl.DateTimeFormat('en-GB', { timeZone: tz || 'UTC', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  const parts = f.formatToParts(new Date(now));
+  const h = Number(parts.find((p) => p.type === 'hour')?.value);
+  const m = Number(parts.find((p) => p.type === 'minute')?.value);
+  return (Number.isFinite(h) ? h : 0) * 60 + (Number.isFinite(m) ? m : 0);
+}
+function hm(s) { const [h, m] = String(s).split(':').map(Number); return (h | 0) * 60 + (m | 0); }
+
+/** Is this class's window open at `now`? A class with no window is always open. */
+export function inWindow(win, now) {
+  if (!win || !win.from || !win.to) return true;
+  const cur = minutesInTz(now, win.tz);
+  const from = hm(win.from); const to = hm(win.to);
+  return from <= to ? (cur >= from && cur < to) : (cur >= from || cur < to);
+}
+
 const KEEP_DURATIONS = 20; // per (class, label), for p90 estimates
 const KEEP_MEMORY = 20; // per (class, label): peak MB per granted token
 
@@ -217,6 +238,11 @@ export function schedule(st, now) {
   for (const j of queueOf(st)) {
     if (j.deadline !== null && now >= j.deadline) { out.expires.push(j.id); continue; }
     if (held(j)) continue; // I11/I12: waits, without a reservation, until the floor job ends
+    // I13: a class with a window starts only inside it, and windowed jobs run one
+    // at a time (ADR 1166 D9.3). A job already running at the window's close is
+    // NOT interrupted — this only decides what STARTS.
+    const win = st.classes[j.class]?.window;
+    if (win && (!inWindow(win, now) || running.some((r) => st.classes[r.class]?.window))) continue;
     // I2: a request made from inside a running lease runs inside it, at once.
     const parent = j.parent ? st.jobs.get(j.parent) : null;
     if (parent && parent.state === 'running') {
@@ -320,6 +346,8 @@ export function explain(st, id, now) {
   const res = s.reservation;
   const eta = res && res.id === id ? (Number.isFinite(res.at) ? new Date(res.at).toISOString() : 'unknown (a running job has no duration estimate)') : null;
   const parts = [`queued at position ${pos + 1} of ${q.length}`];
+  const jwin = st.classes[j.class]?.window;
+  if (jwin && !inWindow(jwin, now)) parts.push(`the ${j.class} window is closed (${jwin.from}–${jwin.to} ${jwin.tz ?? 'UTC'})`);
   const from = (x) => (x.repo ? ` [${x.repo}]` : '');
   if (ahead.length) parts.push(`behind ${ahead.map((a) => `${a.id} (${a.class}${a.label ? ` ${a.label}` : ''}${a.onDemand ? ', on demand' : ''})${from(a)}`).join(', ')}`);
   if (blockers.length) parts.push(`capacity ${cpuCap(st)} is held by ${blockers.map((b) => `${b.id} (${b.class}, ${b.tokens})${from(b)}`).join(', ')}`);

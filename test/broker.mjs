@@ -14,7 +14,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { apply, explain, initialState, PREEMPT_GAP, schedule } from '../src/broker/core.mjs';
+import { apply, DEFAULT_CLASSES, explain, initialState, PREEMPT_GAP, schedule } from '../src/broker/core.mjs';
 import { summarize } from '../src/broker/observed.mjs';
 
 const PKG = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -25,8 +25,8 @@ const check = (name, ok, detail = '') => { if (ok) pass++; else fail++; console.
 // ── Part 1: the pure scheduler ────────────────────────────────────────────────
 // A tiny driver: enqueue/release by hand, run schedule() and apply its decisions
 // the way the server does, keeping the full event log for replay.
-function sim(capacity) {
-  const st = initialState({ capacity });
+function sim(capacity, opts = {}) {
+  const st = initialState({ capacity, ...opts });
   const log = [];
   let now = 1_000_000;
   const ev = (e) => { const x = { seq: st.seq + 1, at: now, ...e }; log.push(x); apply(st, x); return x; };
@@ -46,6 +46,7 @@ function sim(capacity) {
   return {
     st, log, step,
     tick: (s) => { now += s * 1000; },
+    setNow: (t) => { now = t; },
     now: () => now,
     add: (o) => { const id = `j${++n}`; ev({ type: 'enqueue', id, class: 'adhoc', tokens: 1, ...o }); return id; },
     end: (id, reason = 'done') => ev({ type: st.jobs.get(id)?.state === 'running' ? 'release' : 'cancel', id, reason }),
@@ -320,6 +321,45 @@ function sim(capacity) {
     est('/a/.git/tracegate')?.every((x) => x === 100) && est('/b/.git/tracegate')?.every((x) => x === 900) && b.ledger === '/a/.git/tracegate', JSON.stringify([...s.st.durations]));
   const old = s.add({ class: 'gate', label: 'gate main' });
   check('ledgers: a job with no ledger (an older client) keys as before', s.st.jobs.get(old).ledger === null);
+}
+
+// ── I13: release windows (ADR 1166 D9.3) ────────────────────────────────────
+// A class may carry a window: it starts only inside it, in that zone, and such
+// jobs run one at a time. The rule exists because the nightly release window is a
+// wall-clock promise (23:00-06:00 America/New_York), and a scheduler that ignores
+// it turns "release by night" back into "whoever is awake".
+{
+  const NIGHT = { from: '23:00', to: '06:00', tz: 'America/New_York' };
+  const classes = { ...DEFAULT_CLASSES, night: { priority: 50, preemptible: false, window: NIGHT } };
+  const s = sim(4, { classes });
+  s.setNow(Date.parse('2026-11-28T19:00:00Z')); // 14:00 ET, window closed
+  const a = s.add({ class: 'night', tokens: 1, est: 600 });
+  s.step();
+  check('I13: a night job does NOT start outside the window (14:00 ET)', s.state(a) === 'queued');
+  check('I13: ...and explain names the closed window', /window is closed/.test(explain(s.st, a, s.now()).text), explain(s.st, a, s.now()).text);
+
+  s.setNow(Date.parse('2026-11-29T04:30:00Z')); // 23:30 ET, open
+  s.step();
+  check('I13: ...and starts once the window opens (23:30 ET)', s.state(a) === 'running');
+
+  const b = s.add({ class: 'night', tokens: 1, est: 600 });
+  s.step();
+  check('I13: windowed jobs run ONE at a time even with spare capacity', s.state(b) === 'queued');
+  s.end(a); s.step();
+  check('I13: ...and the next starts when the first ends', s.state(b) === 'running');
+
+  s.setNow(Date.parse('2026-11-29T11:30:00Z')); // 06:30 ET, window closed
+  const d = schedule(s.st, s.now());
+  check('I13: a job running past the close is NOT interrupted', s.state(b) === 'running' && d.preempts.length === 0);
+  const c = s.add({ class: 'night', tokens: 1, est: 60 });
+  s.step();
+  check('I13: ...and nothing NEW starts after the close', s.state(c) === 'queued');
+
+  // A class with no window is unaffected (the default for every existing class).
+  const plain = sim(2);
+  const g = plain.add({ class: 'gate', tokens: 1 });
+  plain.step();
+  check('I13: classes without a window are unaffected', plain.state(g) === 'running');
 }
 
 // ── Part 2: a live broker ─────────────────────────────────────────────────────
