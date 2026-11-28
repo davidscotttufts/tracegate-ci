@@ -104,6 +104,7 @@ tracegate lease --class gate --tokens 4 --est 900 --label "gate main@abc123" -- 
 | I7 | **Fencing.** Every grant carries a strictly increasing fence token (`TRACEGATE_FENCE`), so a writer can refuse stale authority | F7, and future ledger writes |
 | I8 | **Event-sourced and deterministic.** All state is a pure function of an append-only JSONL event log. The scheduler is a pure function of (state, now). Replaying the log reproduces every decision | Audit, debugging, the "never delete evidence" rule |
 | I12 | **On demand.** A lease marked `--on-demand` (work a person asked for now, such as a deploy) is ordered ahead of every queued job that is not on demand. While it lives, preemptible work yields at once, with no priority gap, and none starts. It never preempts work that is not preemptible. A preemptible class cannot be on demand | A requested deploy waiting behind the queue |
+| I13 | **A windowed class starts only inside its window, one at a time.** A class may carry `window: { from, to, tz }` (wall clock, in that zone, DST included). Outside it the job is queued and `explain` says so; inside it, such jobs run serially even when capacity is free. A job already running at the close is **not** interrupted — the rule decides what starts, never what dies | The nightly release window (ADR 1166 D9.3): a wall-clock promise a scheduler must keep |
 
 **Job classes** (defaults; the config can override them):
 
@@ -114,6 +115,33 @@ tracegate lease --class gate --tokens 4 --est 900 --label "gate main@abc123" -- 
 | `measure` | 50 | no | normally `--exclusive` |
 | `adhoc` | 30 | no | an agent's targeted run |
 | `daemon` | 10 | **yes** | pre-gating, nightly |
+
+### 4.1 Release windows
+
+A class may declare a wall-clock window. The nightly release window is the case
+that motivated it: "release by night" is a promise about the user's evening, and a
+scheduler that ignores it turns the promise back into "whoever is awake".
+
+```json
+{ "broker": { "classes": {
+    "night": { "priority": 50, "preemptible": false,
+               "window": { "from": "23:00", "to": "06:00", "tz": "America/New_York" } } } } }
+```
+
+```sh
+tracegate lease --class night -- npm run ci    # queued now, starts inside the window
+tracegate queue                                 # shows it parked, with the reason
+tracegate explain <id>                          # "the night window is closed (23:00–06:00 America/New_York)"
+```
+
+- The comparison is in the named zone, so it follows DST: the window is the same
+  local hours in summer and winter.
+- Windowed jobs run **one at a time**, even when capacity would allow more. They
+  are the batch, and a batch is serial by definition (ADR 1166 D3).
+- A job running at the close is not interrupted. Preemption is for preemptible
+  work and pressure, never for a clock.
+- A class with no `window` is unaffected — every existing class keeps its
+  behaviour.
 
 ## 5. Interfaces
 
